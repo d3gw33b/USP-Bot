@@ -1,0 +1,5 @@
+# The live bot's local secrets and log
+bot.env
+bot.log
+__pycache__/
+*.pyc
