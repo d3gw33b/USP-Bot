@@ -830,17 +830,44 @@ def automerge_for(settings, login):
     return any(g.lower() == login.lower() for g in settings["automerge"].values())
 
 
-def merge_approved(st):
-    """Merges the pull request when its vote ends APPROVED. Needs GITHUB_TOKEN with pull request write access."""
+def merge_approved(st, tries=6):
+    """Merges the pull request when its vote ends APPROVED. Needs GITHUB_TOKEN with pull request write access.
+    GitHub answers 405 or 409 while the required checks are still running, so it waits and tries again.
+    Returns True once merged."""
     if not os.environ.get("GITHUB_TOKEN"):
         print("could not merge the pull request: GITHUB_TOKEN is missing from bot.env")
-        return
-    try:
-        http("PUT", f"https://api.github.com/repos/{st['repo']}/pulls/{st['pr']}/merge", {"merge_method": "merge"},
-             {"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json",
-              "User-Agent": "usp-bot"})
-    except Exception as e:
-        print(f"could not merge the pull request: {type(e).__name__}")
+        return False
+    for n in range(tries):
+        try:
+            http("PUT", f"https://api.github.com/repos/{st['repo']}/pulls/{st['pr']}/merge", {"merge_method": "merge"},
+                 {"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json",
+                  "User-Agent": "usp-bot"})
+            return True
+        except RuntimeError as e:
+            if not re.search(r"HTTP (405|409)$", str(e)) or n == tries - 1:
+                print(f"could not merge the pull request: {e}")
+                return False
+            time.sleep(min(30 * 2 ** n, 240))
+        except Exception as e:
+            print(f"could not merge the pull request: {type(e).__name__}")
+            return False
+    return False
+
+
+def sweep_automerge(cfg, settings):
+    """Merges owners' no-vote pull requests that were not ready when their card ran and whose usp/vote is green."""
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if not repo or not settings["automerge"]:
+        return 0
+    n = 0
+    for pr in gh_all(f"/repos/{repo}/pulls?state=open"):
+        if not automerge_for(settings, pr["user"]["login"]):
+            continue
+        runs = gh(f"/repos/{repo}/commits/{pr['head']['sha']}/statuses")
+        latest = next((x for x in runs if x["context"] == "usp/vote"), None)
+        if latest and latest["state"] == "success" and merge_approved({"repo": repo, "pr": pr["number"]}, tries=1):
+            n += 1
+    return n
 
 
 def post_vote_status(st, state):
@@ -1552,6 +1579,7 @@ def cmd_tick():
     handled = read_commands(cfg, settings, cards, start)
     check_requests(cfg, settings, cards)
     decided = check_cards(cfg, settings, cards)
+    sweep_automerge(cfg, settings)
     settings["live"] = False
     save_settings(cfg, settings, sid)
     IN_TICK = False
