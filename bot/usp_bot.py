@@ -371,7 +371,40 @@ def llama_server_path():
     return exe
 
 
+LIVE = False  # set by usp_live.py: answering commands, so never download or set up a model then
+SUMMARY_SECONDS = 45  # a summary command gives up on the model after this, and uses the card's TL;DR
+
+
+def model_ready(model):
+    """True when the local model and its server are already on this computer."""
+    d = llm_dir()
+    return os.path.exists(os.path.join(d, model["file"])) and bool(
+        glob.glob(os.path.join(d, "llama", "**", "llama-server"), recursive=True))
+
+
+def with_deadline(seconds, fn, *args):
+    """Runs fn in the background and waits at most this long, so a slow model can't freeze the bot."""
+    out = {}
+
+    def run():
+        try:
+            out["value"] = fn(*args)
+        except Exception as e:
+            out["error"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        raise TimeoutError(f"no answer in {seconds}s")
+    if "error" in out:
+        raise out["error"]
+    return out.get("value")
+
+
 def run_local(model, prompt):
+    if LIVE and not model_ready(model):
+        raise RuntimeError("the model isn't set up on this computer")
     path = os.path.join(llm_dir(), model["file"])
     download(f"https://huggingface.co/{model['repo']}/resolve/main/{model['file']}", path)
     exe = llama_server_path()
@@ -899,22 +932,25 @@ def handle_command(cfg, settings, cards, msg, now):
         counted, ov, yes, no, voters = tally(cfg, settings, st, rx)
         return (f"{short(st['repo'], st['pr'])}: {st['tier'].replace('_', ' ')}, {MODE_TEXT[st['mode']]}. "
                 f"{len(counted)}/{len(voters)} voted ({yes} ✅, {no} ❌). Ends {ts(st['deadline'])}.")
-    if w[0] == "summary" and len(w) > 1:
-        hit = ref_card(cards, w[1])
+    if w[0] == "summary":
+        open_cards = [(c, st) for c, st in cards if st["state"] == "open"]
+        hit = ref_card(cards, w[1]) if len(w) > 1 else (open_cards[0] if len(open_cards) == 1 else None)
         if not hit:
+            if len(w) == 1 and open_cards:
+                return "Several votes are open. Name one, like `!usp summary usp#3`."
             return "No open vote matches that. Use `usp#N` or `tools#N`."
         m, st = hit
         text = card_summary(m["embeds"][0])
         if not text:
             try:
-                text = make_summary(settings, st)
+                text = with_deadline(SUMMARY_SECONDS, make_summary, settings, st)
             except Exception as e:
                 print(f"summary failed: {type(e).__name__}")
                 text = None
         if not text:
             return "Summary unavailable right now. The bot needs its model running on this computer, and a GitHub token for private repos."
         try:
-            plain = plain_summary(settings, text)
+            plain = with_deadline(SUMMARY_SECONDS, plain_summary, settings, text)
         except Exception as e:
             print(f"plain summary failed: {type(e).__name__}")
             plain = None
