@@ -21,7 +21,7 @@ FATAL = {4004: "the bot token is wrong (reset it and update bot.env)",
          4013: "the gateway intents are invalid",
          4014: "Message Content Intent is off (turn it on in the developer portal, Bot page)"}
 CHECK_EVERY = 60  # seconds between timer checks; also how often it tells the GitHub check it's alive
-SWEEP_EVERY = 300  # seconds between sweeps for owners' pull requests that are still waiting to merge
+SWEEP_EVERY = 60  # seconds between sweeps for owners' pull requests that are still waiting to merge
 STUCK_AFTER = 90  # longest the bot waits on one command or check before moving on
 
 
@@ -192,6 +192,9 @@ class Live:
         if d.get("channel_id") not in self.chans or d["id"] in self.seen:
             return
         self.seen.add(d["id"])
+        if d.get("content", "").startswith(B.AUTOMERGE_TAG) and d.get("author", {}).get("id") == self.me:
+            self.guarded(B.merge_waiting, self.settings, d["content"][len(B.AUTOMERGE_TAG):])  # the card job's word that a pull request is ready
+            return
         before = json.dumps(self.settings, sort_keys=True)
         if B.run_command(self.cfg, self.settings, B.find_cards(self.cfg, self.me), d):
             print("Answered a command.")

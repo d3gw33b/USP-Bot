@@ -322,5 +322,22 @@ def clear_result_clears():
     reply_id=D.ch["11"][-1]["id"]
     return any(secs>0 and reply_id in ids for _,ids,secs in REMOVALS)
 check("51 a clear result clears itself, even in mod chat", clear_result_clears)
+def tag_posted():
+    return any(m["content"].startswith(B.AUTOMERGE_TAG) for m in D.ch.get("22",[]))
+check("58 an owner's no-vote merge tells the live bot to merge it at once", lambda: say("!usp automerge on d3gw33b", who=OW1) and (make_pr(160,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="d3gw33b"), B.cmd_card(), tag_posted())[2])
+def waiting_merges():
+    MERGES.clear(); seen=[0]
+    def fake_gh(path, raw=False, accept=None):
+        if path.endswith("/pulls/161"): return {"state":"open","head":{"sha":"s2"},"user":{"login":"d3gw33b"}}
+        seen[0]+=1
+        return [{"context":"usp/vote","state":"success" if seen[0]>2 else "pending"}]
+    saved_gh, saved_sleep = B.gh, B.time.sleep
+    B.gh=fake_gh; B.time.sleep=lambda sec: None
+    try:
+        ok=B.merge_waiting(saved(), "d3gw33b/USP#161")
+    finally:
+        B.gh, B.time.sleep = saved_gh, saved_sleep
+    return ok and any("pulls/161/merge" in x for x in MERGES)
+check("59 the live bot merges a waiting owner's PR once usp/vote turns green", waiting_merges)
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))

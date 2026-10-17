@@ -659,7 +659,9 @@ def cmd_card():
         post_vote_status(st, st["state"])
         print("No vote needed, so no card.")
         if st["state"] == "owner" and automerge_for(settings, author):  # the owner switched merging on for their own
-            merge_approved(st)
+            merge_approved(st, tries=1)
+            dc("POST", f"/channels/{cfg['ch']['voting']}/messages",  # the live bot merges it the moment this lands
+               {"content": f"{AUTOMERGE_TAG}{repo}#{num}", "allowed_mentions": {"parse": []}})
         return
 
     risk = "\n".join(flags) if flags else "🟢 Nothing flagged by the automatic checks."
@@ -851,6 +853,27 @@ def merge_approved(st, tries=6):
         except Exception as e:
             print(f"could not merge the pull request: {type(e).__name__}")
             return False
+    return False
+
+
+AUTOMERGE_TAG = "-# auto-merge check "
+
+
+def merge_waiting(settings, text):
+    """Merges one owner's no-vote pull request as soon as its usp/vote is green. Tries for about two minutes;
+    the sweep takes over if it's still not merged after that. Called by the live bot on its own message."""
+    repo, _, num = text.strip().partition("#")
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo) or not num.isdigit():
+        return False
+    for _ in range(12):
+        pr = gh(f"/repos/{repo}/pulls/{num}")
+        if pr["state"] != "open" or not automerge_for(settings, pr["user"]["login"]):
+            return False
+        runs = gh(f"/repos/{repo}/commits/{pr['head']['sha']}/statuses")
+        latest = next((x for x in runs if x["context"] == "usp/vote"), None)
+        if latest and latest["state"] == "success" and merge_approved({"repo": repo, "pr": int(num)}, tries=1):
+            return True
+        time.sleep(10)
     return False
 
 
