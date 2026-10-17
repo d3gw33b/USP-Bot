@@ -761,6 +761,43 @@ def edit_card(cfg, m, st, extra=None):
     post_vote_status(st, st["state"])
 
 
+NAMES = {}
+
+
+def user_name(uid):
+    """The name people see for a Discord user. Looked up once, then remembered."""
+    if uid not in NAMES:
+        try:
+            u = dc("GET", f"/users/{uid}")
+            NAMES[uid] = u.get("global_name") or u.get("username") or "an owner"
+        except Exception:
+            return "an owner"  # a name is never worth stopping a vote over
+    return NAMES[uid]
+
+
+OWNER_LINE = {1: "{name} in agreement", -1: "{name} has VETOED!", 0: "{name} has no opinion"}
+
+
+def team_result(cfg, m, st, state, counted, owner_votes, by=None):
+    """Posts the vote's outcome: the team's count for a vote, and each owner's word on their own line."""
+    word = {"approved": "APPROVED", "rejected": "REJECTED", "expired": "ENDED WITHOUT APPROVAL"}[state]
+    tag = short(st["repo"], st["pr"])
+    lines = []
+    if st["mode"] in ("lazy", "democratic") and not by:
+        yes = sum(1 for v in counted.values() if v == 1)
+        no = sum(1 for v in counted.values() if v == -1)
+        neutral = sum(1 for v in counted.values() if v == 0)
+        lines.append(f"**THE TEAM HAS SPOKEN:** {yes} ✅ · {neutral} 🤷 · {no} ❌ on {tag}. Result: **{word}**.")
+    if by:  # an owner's command decided it
+        lines.append(OWNER_LINE.get({"approve": 1, "deny": -1, "veto": -1}[by[0]], "{name}").format(name=user_name(by[1])) + f" on {tag}.")
+    for uid, v in owner_votes.items():
+        lines.append(OWNER_LINE[v].format(name=user_name(uid)) + f" on {tag}.")
+    if lines:
+        dc("POST", f"/channels/{cfg['ch']['voting']}/messages", {
+            "content": "\n".join(lines)[:1900],
+            "message_reference": {"message_id": m["id"], "fail_if_not_exists": False}, "allowed_mentions": {"parse": []}})
+
+
 def announce(cfg, m, st, state, reason):
     word = {"approved": "✅ APPROVED", "rejected": "❌ REJECTED", "expired": "⌛ EXPIRED"}[state]
     tag = short(st["repo"], st["pr"])
@@ -1001,6 +1038,7 @@ def handle_command(cfg, settings, cards, msg, now):
         st["state"] = state
         edit_card(cfg, m, st, f"➜ **{state.upper()}**: {reason} (<@{uid}>).")
         announce(cfg, m, st, state, reason)
+        team_result(cfg, m, st, state, {}, {}, by=(w[0], uid))
         return f"Done: {short(st['repo'], st['pr'])} {state}."
     return "I didn't understand that. Try `!usp help`."
 
@@ -1083,6 +1121,8 @@ def check_card(cfg, settings, m, st, now):
         st["state"] = state
         edit_card(cfg, m, st, f"➜ **{state.upper()}**: {reason}.")
         announce(cfg, m, st, state, reason)
+        counted, ov, _, _, _ = tally(cfg, settings, st, reactions(cfg, cfg["ch"]["voting"], m["id"]))
+        team_result(cfg, m, st, state, counted, ov)
         return True
     return False
 
