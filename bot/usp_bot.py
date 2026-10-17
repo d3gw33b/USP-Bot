@@ -855,18 +855,19 @@ def merge_approved(st, tries=6):
 
 
 def sweep_automerge(cfg, settings):
-    """Merges owners' no-vote pull requests that were not ready when their card ran and whose usp/vote is green."""
-    repo = os.environ.get("GITHUB_REPOSITORY", "")
-    if not repo or not settings["automerge"]:
+    """Merges owners' no-vote pull requests that were not ready when their card ran and whose usp/vote is green.
+    Looks at every repository the bot's GitHub token can reach, so nothing needs setting up per repository."""
+    if not settings["automerge"]:
         return 0
     n = 0
-    for pr in gh_all(f"/repos/{repo}/pulls?state=open"):
-        if not automerge_for(settings, pr["user"]["login"]):
-            continue
-        runs = gh(f"/repos/{repo}/commits/{pr['head']['sha']}/statuses")
-        latest = next((x for x in runs if x["context"] == "usp/vote"), None)
-        if latest and latest["state"] == "success" and merge_approved({"repo": repo, "pr": pr["number"]}, tries=1):
-            n += 1
+    for repo in [r["full_name"] for r in gh_all("/user/repos?affiliation=owner&sort=full_name") if not r.get("archived")]:
+        for pr in gh_all(f"/repos/{repo}/pulls?state=open"):
+            if not automerge_for(settings, pr["user"]["login"]):
+                continue
+            runs = gh(f"/repos/{repo}/commits/{pr['head']['sha']}/statuses")
+            latest = next((x for x in runs if x["context"] == "usp/vote"), None)
+            if latest and latest["state"] == "success" and merge_approved({"repo": repo, "pr": pr["number"]}, tries=1):
+                n += 1
     return n
 
 

@@ -21,7 +21,7 @@ FATAL = {4004: "the bot token is wrong (reset it and update bot.env)",
          4013: "the gateway intents are invalid",
          4014: "Message Content Intent is off (turn it on in the developer portal, Bot page)"}
 CHECK_EVERY = 60  # seconds between timer checks; also how often it tells the GitHub check it's alive
-SWEEP_EVERY = 900  # seconds between sweeps for owners' pull requests that are still waiting to merge
+SWEEP_EVERY = 300  # seconds between sweeps for owners' pull requests that are still waiting to merge
 STUCK_AFTER = 90  # longest the bot waits on one command or check before moving on
 
 

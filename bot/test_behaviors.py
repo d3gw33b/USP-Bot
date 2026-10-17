@@ -308,7 +308,7 @@ def sweep_test():
     MERGES.clear()
     say("!usp automerge on d3gw33b", who=OW1)
     saved_gh_all, saved_gh = B.gh_all, B.gh
-    B.gh_all=lambda path: [{"number":151,"user":{"login":"d3gw33b"},"head":{"sha":"s1"}}]
+    B.gh_all=lambda path: [{"full_name":"d3gw33b/USP","archived":False}] if path.startswith("/user/repos") else [{"number":151,"user":{"login":"d3gw33b"},"head":{"sha":"s1"}}]
     B.gh=lambda path, raw=False, accept=None: [{"context":"usp/vote","state":"success"}]
     try:
         n=B.sweep_automerge(cfg, saved())
