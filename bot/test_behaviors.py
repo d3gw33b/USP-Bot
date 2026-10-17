@@ -59,6 +59,7 @@ def make_pr(num, files, msg="x\n\nAgreed-to: CONTRIBUTING.md#contributor-agreeme
         if "/pulls/" in path: return {"head":{"sha":"abc123"}}
     B.gh=gh
 B.run_local=lambda m,p: "Good:\n- fine\nTL;DR: ok"
+REAL_STATUS=B.post_vote_status
 B.post_vote_status=lambda st, state: print("status", state)
 
 def cards(): return [(m,B.parse_card(m["embeds"][0])) for m in D.ch.get("22",[]) if m["embeds"] and B.parse_card(m["embeds"][0])]
@@ -80,12 +81,13 @@ SUMDIR=os.path.join(tempfile.mkdtemp(), "usp-summary")
 os.environ["USP_SUMMARY_DIR"]=SUMDIR
 os.environ["GITHUB_TOKEN"]="t"
 PATCHES=[]
+STATUSES=[]
 MERGES=[]
 real_http=B.http
 def fake_http(method, url, body=None, headers=None, raw=False, tries=5):
     if method=="PATCH" and "/pulls/" in url: PATCHES.append((url, body)); return {}
     if method=="PUT" and url.endswith("/merge"): MERGES.append(url); return {}
-    if "api.github.com" in url and method=="POST" and "/statuses/" in url: return {}
+    if "api.github.com" in url and method=="POST" and "/statuses/" in url: STATUSES.append((url, body)); return {}
     return real_http(method, url, body, headers, raw, tries)
 B.http=fake_http
 tick()
@@ -174,5 +176,40 @@ L.Live=_flaky
 check("33 startup retries while Discord can't be reached", lambda: L.start_live(cfg, _th.Event(), pause=0)=="live" and _tries[0]==3)
 L.Live=_real_live
 check("34 offline past the limit asks for a restart", lambda: L.should_restart(0, L.WATCHDOG_AFTER+1) and not L.should_restart(0, L.WATCHDOG_AFTER-1) and not L.should_restart(None, 10**9))
+make_pr(99,[{"filename":"a","additions":5000,"deletions":0,"status":"modified","patch":"x"}]); B.cmd_card()
+c99,_=cards()[-1]
+check("35 one owner's veto on a huge vote is a stalemate, not a rejection", lambda: (D.react(c99["id"], OW1, "❌"), B.check_cards(cfg, B.load_settings(cfg)[0], B.find_cards(cfg, D.me)), cards()[-1][1]["state"]=="open")[2])
+check("36 both owners' vetoes reject a huge vote", lambda: (D.react(c99["id"], OW2, "❌"), B.check_cards(cfg, B.load_settings(cfg)[0], B.find_cards(cfg, D.me)), cards()[-1][1]["state"]=="rejected")[2])
+def env_restart_check():
+    d=tempfile.mkdtemp(); path=os.path.join(d, L.ENV_FILE); open(path,"w").write("a")
+    old=L.HERE; L.HERE=d
+    try:
+        since={L.ENV_FILE: L.fingerprint(L.ENV_FILE)}
+        unchanged=L.env_changed(since)
+        open(path,"w").write("b")
+        return unchanged is False and L.env_changed(since) is True
+    finally:
+        L.HERE=old
+check("37 a change to bot.env restarts the bot", env_restart_check)
+def env_wins_check():
+    d=tempfile.mkdtemp(); open(os.path.join(d, "bot.env"),"w").write('GITHUB_TOKEN="from-file"\n')
+    old_here, old_tok = L.HERE, os.environ.get("GITHUB_TOKEN")
+    L.HERE=d; os.environ["GITHUB_TOKEN"]=""
+    try:
+        L.load_env_file()
+        return os.environ["GITHUB_TOKEN"]=="from-file"
+    finally:
+        L.HERE=old_here; os.environ["GITHUB_TOKEN"]=old_tok or ""
+check("38 bot.env values win over empty ones already set on the computer", env_wins_check)
+def approve_end_to_end():
+    B.post_vote_status=REAL_STATUS; STATUSES.clear(); MERGES.clear()
+    make_pr(120,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}]); B.cmd_card()
+    say("!usp approve usp#120", who=OW1)
+    ok = any(b.get("state")=="success" and b.get("context")=="usp/vote" for _,b in STATUSES) and any("pulls/120/merge" in x for x in MERGES)
+    make_pr(121,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}]); B.cmd_card()
+    say("!usp veto usp#121", who=OW1)
+    ok2 = any(b.get("state")=="failure" for _,b in STATUSES) and any("/pulls/121" in u and b=={"state":"closed"} for u,b in PATCHES)
+    return ok and ok2
+check("39 owner approve sets usp/vote to success and merges; veto sets failure and closes", approve_end_to_end)
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))

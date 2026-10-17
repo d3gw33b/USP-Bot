@@ -256,11 +256,16 @@ def load_env_file():
     path = os.path.join(HERE, "bot.env")
     if not os.path.exists(path):
         return
+    names = []
     for line in open(path, encoding="utf-8-sig"):
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip().strip('"'))
+            k = k.strip().removeprefix("export ").strip()
+            # bot.env wins: an empty or old value set elsewhere on the computer used to hide the token
+            os.environ[k] = v.strip().strip('"\'')
+            names.append(k + ("" if os.environ[k] else " (empty)"))
+    print("Read from bot.env: " + (", ".join(names) or "nothing"))  # names only, never values
 
 
 def hold_lock(stop):
@@ -315,8 +320,22 @@ def changed_files(since):
     return [n for n in WATCHED if fingerprint(n) != since[n]]
 
 
+ENV_FILE = "bot.env"  # the secrets file: read only at startup, so a change needs a restart too
+
+
+def env_changed(since):
+    """True when bot.env was changed or replaced since the bot started."""
+    try:
+        return fingerprint(ENV_FILE) != since[ENV_FILE]
+    except OSError:
+        return False
+
+
 def reload_if_updated(live, lock, since):
     """Restarts this process on the new code, once the new files compile. Returns only if nothing changed."""
+    if env_changed(since):
+        print("bot.env changed; restarting so the new settings load.")
+        restart_self(live, lock)
     if not changed_files(since):
         return
     for n in WATCHED:
@@ -395,6 +414,7 @@ def main():
     if "--for" in sys.argv:  # run for a while, then stop cleanly (used by the bot-live-check workflow)
         threading.Timer(float(sys.argv[sys.argv.index("--for") + 1]), stop.set).start()
     since = {n: fingerprint(n) for n in WATCHED}
+    since[ENV_FILE] = fingerprint(ENV_FILE) if os.path.exists(os.path.join(HERE, ENV_FILE)) else None
     print("Watching " + ", ".join(WATCHED) + " for new code.")
     B.LIVE = True
     live = start_live(cfg, stop)
