@@ -10,7 +10,7 @@ file called bot.env next to this one (one KEY=value per line). Never commit bot.
 While it runs, the 15-minute GitHub check stands back. When it stops, the GitHub check takes over again.
 Standard library only.
 """
-import base64, json, os, queue, random, socket, ssl, struct, sys, threading, time
+import base64, hashlib, json, os, queue, random, socket, ssl, struct, sys, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usp_bot as B
@@ -304,9 +304,15 @@ def connect_loop(live, events, stop):
 WATCHED = ("usp_bot.py", "usp_live.py")
 
 
+def fingerprint(name):
+    """What the bot's own file holds now. Content, not modification time, so a copy always counts."""
+    with open(os.path.join(HERE, name), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
 def changed_files(since):
-    """The bot's own files whose modification time moved, so a new version can load without a restart."""
-    return [n for n in WATCHED if os.path.getmtime(os.path.join(HERE, n)) != since[n]]
+    """The bot's own files whose contents changed, so a new version can load without a restart."""
+    return [n for n in WATCHED if fingerprint(n) != since[n]]
 
 
 def reload_if_updated(live, lock, since):
@@ -319,7 +325,7 @@ def reload_if_updated(live, lock, since):
         except (OSError, SyntaxError) as e:
             print(f"{n} changed but doesn't load yet ({type(e).__name__}); keeping the current code.")
             for k in WATCHED:
-                since[k] = os.path.getmtime(os.path.join(HERE, k))
+                since[k] = fingerprint(k)
             return
     print("New bot code found; reloading.")
     live.settings["live"] = False
@@ -362,7 +368,8 @@ def main():
     print(time.strftime("%Y-%m-%d %H:%M ") + "Starting the bot.")
     if "--for" in sys.argv:  # run for a while, then stop cleanly (used by the bot-live-check workflow)
         threading.Timer(float(sys.argv[sys.argv.index("--for") + 1]), stop.set).start()
-    since = {n: os.path.getmtime(os.path.join(HERE, n)) for n in WATCHED}
+    since = {n: fingerprint(n) for n in WATCHED}
+    print("Watching " + ", ".join(WATCHED) + " for new code.")
     B.LIVE = True
     live = Live(cfg)
     events = queue.Queue()
