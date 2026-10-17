@@ -268,6 +268,54 @@ def clear_settings_keeps_cards():
 check("48 clear never deletes the settings or help card", clear_settings_keeps_cards)
 check("49 decision cards no longer tell owners to finish on GitHub", lambda: "on GitHub or ask for changes" not in open(B.__file__).read() and "can now merge it on GitHub" not in open(B.__file__).read())
 check("50 !usp commands shows the help", lambda: "help_link" in B.handle_command.__code__.co_names or "pinned" in say("!usp commands", ch="11") or "commands" in say("!usp commands", ch="11"))
+def automerge_on():
+    say("!usp automerge on d3gw33b", who=OW1)
+    return saved()["automerge"]=={OW1:"d3gw33b"}
+check("52 an owner turns auto-merge on for their own GitHub account", automerge_on)
+def automerge_refuses():
+    r1=say("!usp automerge on someone-else", who=OW2)
+    r2=say("!usp automerge on d3gw33b", who=MOD1, ch="22")
+    return "Use `!usp automerge" in r1 and "Only the owners" in r2 and saved()["automerge"]=={OW1:"d3gw33b"}
+check("53 automerge only takes an owner's own accounts, and only owners can set it", automerge_refuses)
+def owner_pr_merges():
+    MERGES.clear()
+    make_pr(140,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="d3gw33b"); B.cmd_card()
+    return any("pulls/140/merge" in x for x in MERGES)
+check("54 an owner's no-vote pull request merges when that owner switched it on", owner_pr_merges)
+def other_pr_waits():
+    MERGES.clear()
+    make_pr(141,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="bob"); B.cmd_card()
+    say("!usp automerge off", who=OW1)
+    make_pr(142,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="d3gw33b"); B.cmd_card()
+    return not any(x in y for x in ("pulls/141/merge","pulls/142/merge") for y in MERGES)
+check("55 a non-owner's pull request, or an owner's after switching off, waits", other_pr_waits)
+def merge_retry():
+    calls=[0]
+    def flaky(method, url, body=None, headers=None, raw=False, tries=5):
+        if method=="PUT" and url.endswith("/merge"):
+            calls[0]+=1
+            if calls[0]<3: raise RuntimeError("PUT -> HTTP 405")
+            MERGES.append(url); return {}
+        return fake_http(method, url, body, headers, raw, tries)
+    _sleep=B.time.sleep; B.time.sleep=lambda sec: None; B.http=flaky
+    try:
+        ok=B.merge_approved({"repo":"d3gw33b/USP","pr":150}, tries=6)
+    finally:
+        B.http=fake_http; B.time.sleep=_sleep
+    return ok and calls[0]==3
+check("56 a merge GitHub isn't ready for is retried until it goes through", merge_retry)
+def sweep_test():
+    MERGES.clear()
+    say("!usp automerge on d3gw33b", who=OW1)
+    saved_gh_all, saved_gh = B.gh_all, B.gh
+    B.gh_all=lambda path: [{"number":151,"user":{"login":"d3gw33b"},"head":{"sha":"s1"}}]
+    B.gh=lambda path, raw=False, accept=None: [{"context":"usp/vote","state":"success"}]
+    try:
+        n=B.sweep_automerge(cfg, saved())
+    finally:
+        B.gh_all, B.gh = saved_gh_all, saved_gh
+    return n==1 and any("pulls/151/merge" in x for x in MERGES)
+check("57 the sweep merges an owner's green pull request that was left waiting", sweep_test)
 def clear_result_clears():
     REMOVALS.clear()
     say("!usp clear 1", who=OW1, ch="11")

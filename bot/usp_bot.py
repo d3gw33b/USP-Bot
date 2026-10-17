@@ -25,6 +25,7 @@ UA = "DiscordBot (https://github.com/d3gw33b/USP-Bot, 1)"
 SETTINGS_MARK = "USP-BOT-SETTINGS"  # the older plain-text settings message; converted on first sight
 SETTINGS_TITLE = "⚙️ USP bot settings"
 WHITELIST_FIELD = "Whitelisted (owner commands without asking)"
+AUTOMERGE_FIELD = "Owner auto-merge (own pull requests, no vote)"
 DISCORD_EPOCH = 1420070400000
 LIVE_FRESH_MS = 180_000  # the scheduled check stands back while the live bot has checked in this recently
 YES, MEH, NO = "✅", "🤷", "❌"
@@ -50,6 +51,7 @@ DEFAULT_SETTINGS = {
     "timers": {"command": 5, "summary": 0, "help": 0},
     "github_owners": [],
     "whitelist": [],  # Discord ids that may use owner commands without asking (not approve, deny or veto)
+    "automerge": {},  # owner's Discord id -> their GitHub name; that owner's own no-vote pull requests merge on their own
     # Overrides change how new votes are decided without touching the defaults above.
     # scope -> {"mode": lazy|democratic|owner1|owner2|auto or None, "hours": float or None}
     "override_on": False,
@@ -237,7 +239,9 @@ def settings_embed(s):
                {"name": "Owner GitHub accounts (no vote needed)",
                 "value": " ".join(f"`{g}`" for g in s["github_owners"]) or "Only the repository owner. Add more with `!usp github-owners add <name>`."},
                {"name": WHITELIST_FIELD,
-                "value": ", ".join(f"<@{v}>" for v in s["whitelist"]) or "Nobody. Owners add people with `!usp whitelist add @name`."}]
+                "value": ", ".join(f"<@{v}>" for v in s["whitelist"]) or "Nobody. Owners add people with `!usp whitelist add @name`."},
+               {"name": AUTOMERGE_FIELD,
+                "value": ", ".join(f"<@{u}> `{g}`" for u, g in s["automerge"].items()) or "Off for everyone. Each owner turns on their own with `!usp automerge on <github name>`."}]
     return {"title": SETTINGS_TITLE, "color": 0x5865F2, "fields": fields,
             "description": "Change these with `!usp` commands. `!usp help` lists them.",
             "footer": {"text": "🟢 Online, replies instantly · last check" if s.get("live") else "Checks every 15 minutes · last check"},
@@ -278,6 +282,7 @@ def parse_settings(e):
                 s["overrides"][names[m.group(1)]] = o
     s["github_owners"] = re.findall(r"`([A-Za-z0-9-]+)`", f.get("Owner GitHub accounts (no vote needed)", ""))
     s["whitelist"] = re.findall(r"<@!?(\d+)>", f.get(WHITELIST_FIELD, ""))
+    s["automerge"] = dict(re.findall(r"<@!?(\d+)> `([A-Za-z0-9-]+)`", f.get(AUTOMERGE_FIELD, "")))
     if s["tiers"]["tiny"]["hours"] == 0.5 and s["tiers"]["small"]["hours"] == 0.75:  # the first defaults were too slow
         s["tiers"]["tiny"]["hours"], s["tiers"]["small"]["hours"] = 0.0833, 0.25
     s["cursor"] = from_iso(e["timestamp"]) if e.get("timestamp") else 0
@@ -653,6 +658,8 @@ def cmd_card():
     if quiet:  # not a vote, so it stays out of the voting channel
         post_vote_status(st, st["state"])
         print("No vote needed, so no card.")
+        if st["state"] == "owner" and automerge_for(settings, author):  # the owner switched merging on for their own
+            merge_approved(st)
         return
 
     risk = "\n".join(flags) if flags else "🟢 Nothing flagged by the automatic checks."
@@ -714,6 +721,7 @@ HELP = """Type these in the bot settings channel, mod chat or the voting channel
 **Owner commands**
 The owners and whitelisted members run these straight away. When anyone else tries one, the bot asks the owners instead: an owner's ✅ on that message runs it and ❌ cancels.
 `!usp whitelist add @name` · `!usp whitelist remove @name`: lets someone run owner commands without asking (not approve, deny or veto)
+`!usp automerge on <github name>` · `off`: your own pull requests that skip the vote merge on their own once `usp/vote` is green. Each owner sets this for themselves.
 `!usp clear 20`: deletes the bot's last 20 messages in that channel. In the settings and voting channels it asks "are you sure?" first, and only an owner's or whitelisted member's ✅ goes ahead. Pinned messages, the settings and help cards, open votes and waiting requests are never deleted.
 `!usp voters add @name` · `!usp voters remove @name`
 `!usp github-owners add <github name>`: that account's pull requests skip the vote (the repo owner's always do)
@@ -817,17 +825,49 @@ def close_rejected(st):
         print(f"could not close the pull request: {type(e).__name__}")
 
 
-def merge_approved(st):
-    """Merges the pull request when its vote ends APPROVED. Needs GITHUB_TOKEN with pull request write access."""
+def automerge_for(settings, login):
+    """True when an owner turned auto-merge on for this GitHub account."""
+    return any(g.lower() == login.lower() for g in settings["automerge"].values())
+
+
+def merge_approved(st, tries=6):
+    """Merges the pull request when its vote ends APPROVED. Needs GITHUB_TOKEN with pull request write access.
+    GitHub answers 405 or 409 while the required checks are still running, so it waits and tries again.
+    Returns True once merged."""
     if not os.environ.get("GITHUB_TOKEN"):
         print("could not merge the pull request: GITHUB_TOKEN is missing from bot.env")
-        return
-    try:
-        http("PUT", f"https://api.github.com/repos/{st['repo']}/pulls/{st['pr']}/merge", {"merge_method": "merge"},
-             {"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json",
-              "User-Agent": "usp-bot"})
-    except Exception as e:
-        print(f"could not merge the pull request: {type(e).__name__}")
+        return False
+    for n in range(tries):
+        try:
+            http("PUT", f"https://api.github.com/repos/{st['repo']}/pulls/{st['pr']}/merge", {"merge_method": "merge"},
+                 {"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json",
+                  "User-Agent": "usp-bot"})
+            return True
+        except RuntimeError as e:
+            if not re.search(r"HTTP (405|409)$", str(e)) or n == tries - 1:
+                print(f"could not merge the pull request: {e}")
+                return False
+            time.sleep(min(30 * 2 ** n, 240))
+        except Exception as e:
+            print(f"could not merge the pull request: {type(e).__name__}")
+            return False
+    return False
+
+
+def sweep_automerge(cfg, settings):
+    """Merges owners' no-vote pull requests that were not ready when their card ran and whose usp/vote is green."""
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if not repo or not settings["automerge"]:
+        return 0
+    n = 0
+    for pr in gh_all(f"/repos/{repo}/pulls?state=open"):
+        if not automerge_for(settings, pr["user"]["login"]):
+            continue
+        runs = gh(f"/repos/{repo}/commits/{pr['head']['sha']}/statuses")
+        latest = next((x for x in runs if x["context"] == "usp/vote"), None)
+        if latest and latest["state"] == "success" and merge_approved({"repo": repo, "pr": pr["number"]}, tries=1):
+            n += 1
+    return n
 
 
 def post_vote_status(st, state):
@@ -1246,6 +1286,22 @@ def handle_command(cfg, settings, cards, msg, now):
         keep = [g for g in settings["github_owners"] if g.lower() not in low]
         settings["github_owners"] = keep + (names if w[1] == "add" else [])
         return "Owner GitHub accounts now: " + (", ".join(f"`{g}`" for g in settings["github_owners"]) or "only the repository owner")
+    if w[0] == "automerge":  # each owner switches this on or off for their own pull requests only
+        if uid not in owners:
+            return "Only the owners can change that."
+        if len(w) == 1 or w[1] == "show":
+            mine = settings["automerge"].get(uid)
+            return (f"On: your own no-vote pull requests from `{mine}` merge on their own." if mine
+                    else "Off: your own no-vote pull requests wait for a merge on GitHub.")
+        if w[1] == "off":
+            settings["automerge"].pop(uid, None)
+            return "Off: your own no-vote pull requests wait for a merge on GitHub."
+        name = words[2] if len(words) > 2 else ""
+        owned = {g.lower() for g in settings["github_owners"] + [os.environ.get("GITHUB_REPOSITORY_OWNER", "")] if g}
+        if w[1] != "on" or not re.fullmatch(r"[A-Za-z0-9-]{1,39}", name) or name.lower() not in owned:
+            return "Use `!usp automerge on <github name>` with one of your accounts from `!usp github-owners`, or `!usp automerge off`."
+        settings["automerge"][uid] = name
+        return f"On: your own no-vote pull requests from `{name}` merge on their own once `usp/vote` is green."
     if w[0] == "whitelist":
         if len(w) == 1 or w[1] == "list":
             return ("Whitelisted: " + (", ".join(f"<@{v}>" for v in settings["whitelist"]) or "nobody")
@@ -1530,6 +1586,7 @@ def cmd_tick():
     handled = read_commands(cfg, settings, cards, start)
     check_requests(cfg, settings, cards)
     decided = check_cards(cfg, settings, cards)
+    sweep_automerge(cfg, settings)
     settings["live"] = False
     save_settings(cfg, settings, sid)
     IN_TICK = False

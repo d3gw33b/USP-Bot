@@ -21,6 +21,7 @@ FATAL = {4004: "the bot token is wrong (reset it and update bot.env)",
          4013: "the gateway intents are invalid",
          4014: "Message Content Intent is off (turn it on in the developer portal, Bot page)"}
 CHECK_EVERY = 60  # seconds between timer checks; also how often it tells the GitHub check it's alive
+SWEEP_EVERY = 900  # seconds between sweeps for owners' pull requests that are still waiting to merge
 STUCK_AFTER = 90  # longest the bot waits on one command or check before moving on
 
 
@@ -171,6 +172,7 @@ class Live:
         self.seen = set()
         self.online = threading.Event()
         self.synced = False  # caught up on commands sent while it was offline
+        self.last_sweep = 0
 
     def save(self):
         B.save_settings(self.cfg, self.settings, self.sid)
@@ -219,6 +221,9 @@ class Live:
         """Timer check, and moves the cursor so the GitHub check knows this bot is alive."""
         B.check_cards(self.cfg, self.settings, B.find_cards(self.cfg, self.me))
         B.check_summary_requests(self.cfg)
+        if time.time() - self.last_sweep >= SWEEP_EVERY:
+            self.last_sweep = time.time()
+            B.sweep_automerge(self.cfg, self.settings)
         if self.online.is_set() and self.synced:
             self.settings["cursor"] = max(self.settings["cursor"], B.now_ms() - 10_000)
             self.settings["live"] = True
