@@ -1297,9 +1297,8 @@ def handle_command(cfg, settings, cards, msg, now):
             settings["automerge"].pop(uid, None)
             return "Off: your own no-vote pull requests wait for a merge on GitHub."
         name = words[2] if len(words) > 2 else ""
-        owned = {g.lower() for g in settings["github_owners"] + [os.environ.get("GITHUB_REPOSITORY_OWNER", "")] if g}
-        if w[1] != "on" or not re.fullmatch(r"[A-Za-z0-9-]{1,39}", name) or name.lower() not in owned:
-            return "Use `!usp automerge on <github name>` with one of your accounts from `!usp github-owners`, or `!usp automerge off`."
+        if w[1] != "on" or not re.fullmatch(r"[A-Za-z0-9-]{1,39}", name):  # only pull requests from owner accounts are merged, so any name is safe to store
+            return "Use `!usp automerge on <github name>` with your GitHub name, or `!usp automerge off`."
         settings["automerge"][uid] = name
         return f"On: your own no-vote pull requests from `{name}` merge on their own once `usp/vote` is green."
     if w[0] == "whitelist":

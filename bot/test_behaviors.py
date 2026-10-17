@@ -273,10 +273,10 @@ def automerge_on():
     return saved()["automerge"]=={OW1:"d3gw33b"}
 check("52 an owner turns auto-merge on for their own GitHub account", automerge_on)
 def automerge_refuses():
-    r1=say("!usp automerge on someone-else", who=OW2)
+    r1=say("!usp automerge on bad!name", who=OW2)
     r2=say("!usp automerge on d3gw33b", who=MOD1, ch="22")
     return "Use `!usp automerge" in r1 and "Only the owners" in r2 and saved()["automerge"]=={OW1:"d3gw33b"}
-check("53 automerge only takes an owner's own accounts, and only owners can set it", automerge_refuses)
+check("53 automerge needs a GitHub name, and only owners can set it", automerge_refuses)
 def owner_pr_merges():
     MERGES.clear()
     make_pr(140,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="d3gw33b"); B.cmd_card()
