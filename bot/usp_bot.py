@@ -659,9 +659,7 @@ def cmd_card():
         post_vote_status(st, st["state"])
         print("No vote needed, so no card.")
         if st["state"] == "owner" and automerge_for(settings, author):  # the owner switched merging on for their own
-            merge_approved(st, tries=1)
-            dc("POST", f"/channels/{cfg['ch']['mod']}/messages",  # mod chat, not voting: the live bot merges it, then deletes this note
-               {"content": f"{AUTOMERGE_TAG}{repo}#{num}", "allowed_mentions": {"parse": []}})
+            merge_approved(st, tries=1)  # the live bot's sweep merges it if this token can't
         return
 
     risk = "\n".join(flags) if flags else "🟢 Nothing flagged by the automatic checks."
@@ -856,25 +854,8 @@ def merge_approved(st, tries=6):
     return False
 
 
-AUTOMERGE_TAG = "-# auto-merge check "
-
-
-def merge_waiting(settings, text):
-    """Merges one owner's no-vote pull request as soon as its usp/vote is green. Tries for about two minutes;
-    the sweep takes over if it's still not merged after that. Called by the live bot on its own message."""
-    repo, _, num = text.strip().partition("#")
-    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo) or not num.isdigit():
-        return False
-    for _ in range(12):
-        pr = gh(f"/repos/{repo}/pulls/{num}")
-        if pr["state"] != "open" or not automerge_for(settings, pr["user"]["login"]):
-            return False
-        runs = gh(f"/repos/{repo}/commits/{pr['head']['sha']}/statuses")
-        latest = next((x for x in runs if x["context"] == "usp/vote"), None)
-        if latest and latest["state"] == "success" and merge_approved({"repo": repo, "pr": int(num)}, tries=1):
-            return True
-        time.sleep(10)
-    return False
+REPOS = {"at": 0, "list": []}  # the owner's repositories, looked up again every REPOS_EVERY seconds
+REPOS_EVERY = 600
 
 
 def sweep_automerge(cfg, settings):
@@ -882,8 +863,11 @@ def sweep_automerge(cfg, settings):
     Looks at every repository the bot's GitHub token can reach, so nothing needs setting up per repository."""
     if not settings["automerge"]:
         return 0
+    if time.time() - REPOS["at"] >= REPOS_EVERY:
+        REPOS["list"] = [r["full_name"] for r in gh_all("/user/repos?affiliation=owner&sort=full_name") if not r.get("archived")]
+        REPOS["at"] = time.time()
     n = 0
-    for repo in [r["full_name"] for r in gh_all("/user/repos?affiliation=owner&sort=full_name") if not r.get("archived")]:
+    for repo in REPOS["list"]:
         for pr in gh_all(f"/repos/{repo}/pulls?state=open"):
             if not automerge_for(settings, pr["user"]["login"]):
                 continue

@@ -21,7 +21,7 @@ FATAL = {4004: "the bot token is wrong (reset it and update bot.env)",
          4013: "the gateway intents are invalid",
          4014: "Message Content Intent is off (turn it on in the developer portal, Bot page)"}
 CHECK_EVERY = 60  # seconds between timer checks; also how often it tells the GitHub check it's alive
-SWEEP_EVERY = 60  # seconds between sweeps for owners' pull requests that are still waiting to merge
+SWEEP_EVERY = 15  # seconds between sweeps for owners' pull requests waiting to merge, so they merge almost at once
 STUCK_AFTER = 90  # longest the bot waits on one command or check before moving on
 
 
@@ -192,13 +192,6 @@ class Live:
         if d.get("channel_id") not in self.chans or d["id"] in self.seen:
             return
         self.seen.add(d["id"])
-        if d.get("content", "").startswith(B.AUTOMERGE_TAG) and d.get("author", {}).get("id") == self.me:
-            self.guarded(B.merge_waiting, self.settings, d["content"][len(B.AUTOMERGE_TAG):])  # the card job's word that a pull request is ready
-            try:
-                B.dc("DELETE", f"/channels/{d['channel_id']}/messages/{d['id']}")  # a note, not a vote or a message to keep
-            except Exception as e:
-                print(f"could not remove a note: {type(e).__name__}")
-            return
         before = json.dumps(self.settings, sort_keys=True)
         if B.run_command(self.cfg, self.settings, B.find_cards(self.cfg, self.me), d):
             print("Answered a command.")
@@ -228,9 +221,6 @@ class Live:
         """Timer check, and moves the cursor so the GitHub check knows this bot is alive."""
         B.check_cards(self.cfg, self.settings, B.find_cards(self.cfg, self.me))
         B.check_summary_requests(self.cfg)
-        if time.time() - self.last_sweep >= SWEEP_EVERY:
-            self.last_sweep = time.time()
-            B.sweep_automerge(self.cfg, self.settings)
         if self.online.is_set() and self.synced:
             self.settings["cursor"] = max(self.settings["cursor"], B.now_ms() - 10_000)
             self.settings["live"] = True
@@ -255,6 +245,9 @@ class Live:
             if time.time() - last >= CHECK_EVERY:
                 last = time.time()
                 self.guarded(self.check_in)
+            if self.synced and time.time() - self.last_sweep >= SWEEP_EVERY:
+                self.last_sweep = time.time()
+                self.guarded(B.sweep_automerge, self.cfg, self.settings)
 
     def guarded(self, fn, *args):
         """Runs one job, but stops waiting after STUCK_AFTER seconds so one slow job can't freeze the bot."""
