@@ -834,6 +834,7 @@ def post_vote_status(st, state):
              {"state": gate[0], "context": VOTE_CONTEXT, "description": gate[1]},
              {"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json",
               "User-Agent": "usp-bot"})
+        print(f"usp/vote set to {gate[0]} on {short(st['repo'], st['pr'])}")
     except Exception as e:
         print(f"vote status not posted: {type(e).__name__}")
 
