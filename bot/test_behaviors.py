@@ -268,5 +268,26 @@ def clear_settings_keeps_cards():
 check("48 clear never deletes the settings or help card", clear_settings_keeps_cards)
 check("49 decision cards no longer tell owners to finish on GitHub", lambda: "on GitHub or ask for changes" not in open(B.__file__).read() and "can now merge it on GitHub" not in open(B.__file__).read())
 check("50 !usp commands shows the help", lambda: "help_link" in B.handle_command.__code__.co_names or "pinned" in say("!usp commands", ch="11") or "commands" in say("!usp commands", ch="11"))
+def automerge_on():
+    say("!usp automerge on d3gw33b", who=OW1)
+    return saved()["automerge"]=={OW1:"d3gw33b"}
+check("52 an owner turns auto-merge on for their own GitHub account", automerge_on)
+def automerge_refuses():
+    r1=say("!usp automerge on someone-else", who=OW2)
+    r2=say("!usp automerge on d3gw33b", who=MOD1, ch="22")
+    return "Use `!usp automerge" in r1 and "Only the owners" in r2 and saved()["automerge"]=={OW1:"d3gw33b"}
+check("53 automerge only takes an owner's own accounts, and only owners can set it", automerge_refuses)
+def owner_pr_merges():
+    MERGES.clear()
+    make_pr(140,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="d3gw33b"); B.cmd_card()
+    return any("pulls/140/merge" in x for x in MERGES)
+check("54 an owner's no-vote pull request merges when that owner switched it on", owner_pr_merges)
+def other_pr_waits():
+    MERGES.clear()
+    make_pr(141,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="bob"); B.cmd_card()
+    say("!usp automerge off", who=OW1)
+    make_pr(142,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="d3gw33b"); B.cmd_card()
+    return not any(x in y for x in ("pulls/141/merge","pulls/142/merge") for y in MERGES)
+check("55 a non-owner's pull request, or an owner's after switching off, waits", other_pr_waits)
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
