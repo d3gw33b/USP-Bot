@@ -329,7 +329,13 @@ def reload_if_updated(live, lock, since):
     except Exception:
         pass
     lock.close()  # free the port so the new copy can take it
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+    args = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+    if os.name == "nt":  # Windows execv drops the quotes around paths with spaces, so start a fresh copy instead
+        import subprocess
+        subprocess.Popen(args, cwd=HERE, close_fds=True,
+                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        os._exit(0)
+    os.execv(sys.executable, args)
 
 
 def main():
