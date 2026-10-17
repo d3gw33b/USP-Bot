@@ -18,7 +18,7 @@ jobs:
             range="${{ github.event.before }}..${{ github.sha }}"
           fi
           bad=0
-          for c in $(git rev-list "$range"); do
+          for c in $(git rev-list --no-merges "$range"); do
             if ! git log -1 --format=%B "$c" | grep -qx 'Agreed-to: CONTRIBUTING.md#contributor-agreement'; then
               echo "::error::Commit $c is missing the line: Agreed-to: CONTRIBUTING.md#contributor-agreement"; bad=1
             fi

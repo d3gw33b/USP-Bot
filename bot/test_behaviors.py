@@ -130,5 +130,31 @@ check("17 help command replies", lambda: len(say("!usp help"))>0)
 check("18 team result text says THE TEAM HAS SPOKEN", lambda: "THE TEAM HAS SPOKEN" in open(os.path.join(os.path.dirname(B.__file__),"usp_bot.py")).read())
 check("19 owner decisions are listed separately", lambda: all(w in open(os.path.join(os.path.dirname(B.__file__),"usp_bot.py")).read() for w in ["in agreement","has VETOED","has no opinion"]))
 check("20 bot reloads on any change to its files (content hash)", lambda: "hashlib.sha256" in open(os.path.join(os.path.dirname(B.__file__),"usp_live.py")).read())
+REMOVALS=[]
+B.remove_later=lambda ch, ids, secs: REMOVALS.append((ch, ids, secs))
+def card_ends(num, files):
+    make_pr(num, files); B.cmd_card()
+    return cards()[-1]
+check("21 tiny vote ends in 5 minutes", lambda: (lambda c: c[1]["deadline"]-CLOCK[0]//1000)(card_ends(94,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}]))==300)
+check("22 small vote ends in 15 minutes", lambda: (lambda c: c[1]["deadline"]-CLOCK[0]//1000)(card_ends(95,[{"filename":"a","additions":50,"deletions":0,"status":"modified","patch":"x"}]))==900)
+def owner_yes_passes(num, files):
+    c,_=card_ends(num, files)
+    D.react(c["id"], OW1, "✅")
+    B.check_cards(cfg, B.load_settings(cfg)[0], B.find_cards(cfg, D.me))
+    return cards()[-1][1]["state"]
+check("23 owner ✅ passes a tiny vote at once", lambda: owner_yes_passes(96,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}])=="approved")
+check("24 owner ✅ passes a small vote at once", lambda: owner_yes_passes(97,[{"filename":"a","additions":50,"deletions":0,"status":"modified","patch":"x"}])=="approved")
+REMOVALS.clear()
+say("!usp help", ch="22")
+say("!usp summary usp#94", ch="22")
+check("25 help and summary replies are not auto-deleted by default", lambda: REMOVALS==[])
+REMOVALS.clear()
+say("!usp voters", ch="22")
+check("26 a command in voting gets the 5 second delete", lambda: [r[2] for r in REMOVALS]==[5])
+REMOVALS.clear()
+say("!usp voters", ch="11")
+check("27 mod chat is exempt from auto-delete", lambda: REMOVALS==[] and not D.ch["11"][-1]["content"].startswith("<"))
+card_ids={m["id"] for m,_ in cards()}
+check("28 vote cards are never scheduled for deletion", lambda: not any(i in card_ids for _,ids,_ in REMOVALS for i in ids))
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
