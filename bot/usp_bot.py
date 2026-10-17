@@ -761,7 +761,10 @@ def tally(cfg, settings, st, rx):
 def decide(cfg, settings, st, rx, now):
     """Returns (new_state, reason) or (None, None) while still open. Owners' ❌ is a veto at any tier."""
     counted, ov, yes, no, voters = tally(cfg, settings, st, rx)
-    if any(v == -1 for v in ov.values()):
+    if st["mode"] == "owner2":  # a huge change is vetoed only when both owners say no
+        if cfg["owners"] and all(ov.get(o) == -1 for o in cfg["owners"]):
+            return "rejected", "vetoed by both owners"
+    elif any(v == -1 for v in ov.values()):
         return "rejected", "vetoed by an owner"
     everyone = len(counted) >= len(voters)
     ended = now >= st["deadline"] or everyone
@@ -807,6 +810,7 @@ def close_rejected(st):
 def merge_approved(st):
     """Merges the pull request when its vote ends APPROVED. Needs GITHUB_TOKEN with pull request write access."""
     if not os.environ.get("GITHUB_TOKEN"):
+        print("could not merge the pull request: GITHUB_TOKEN is missing from bot.env")
         return
     try:
         http("PUT", f"https://api.github.com/repos/{st['repo']}/pulls/{st['pr']}/merge", {"merge_method": "merge"},
@@ -819,7 +823,10 @@ def merge_approved(st):
 def post_vote_status(st, state):
     """Puts the vote's result on the pull request's head commit. Needs GITHUB_TOKEN with commit status write access."""
     gate = GATE.get(state)
-    if not gate or not os.environ.get("GITHUB_TOKEN"):
+    if not gate:
+        return
+    if not os.environ.get("GITHUB_TOKEN"):
+        print("vote status not posted: GITHUB_TOKEN is missing from bot.env")
         return
     try:
         sha = gh(f"/repos/{st['repo']}/pulls/{st['pr']}")["head"]["sha"]
@@ -1205,12 +1212,13 @@ def handle_command(cfg, settings, cards, msg, now):
             return f"{short(st['repo'], st['pr'])} now: {MODE_TEXT[target]}."
         if not is_owner:
             return only_owners
-        if w[0] == "approve" and st["mode"] == "owner2":  # a huge change needs both owners
-            got = settings.setdefault("approvals", {}).setdefault(m["id"], [])
+        if w[0] in ("approve", "veto") and st["mode"] == "owner2":  # a huge change needs both owners to agree
+            key = "approvals" if w[0] == "approve" else "vetoes"
+            got = settings.setdefault(key, {}).setdefault(m["id"], [])
             if uid not in got:
                 got.append(uid)
             if any(o not in got for o in cfg["owners"]):
-                return f"{short(st['repo'], st['pr'])} needs both owners. Your approval is recorded; waiting for the other owner."
+                return f"{short(st['repo'], st['pr'])} needs both owners to {w[0]}. Your word is recorded; waiting for the other owner."
         state = "approved" if w[0] == "approve" else "rejected"
         reason = {"approve": "approved by an owner", "deny": "denied by an owner", "veto": "vetoed by an owner"}[w[0]]
         st["state"] = state

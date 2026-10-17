@@ -174,5 +174,9 @@ L.Live=_flaky
 check("33 startup retries while Discord can't be reached", lambda: L.start_live(cfg, _th.Event(), pause=0)=="live" and _tries[0]==3)
 L.Live=_real_live
 check("34 offline past the limit asks for a restart", lambda: L.should_restart(0, L.WATCHDOG_AFTER+1) and not L.should_restart(0, L.WATCHDOG_AFTER-1) and not L.should_restart(None, 10**9))
+make_pr(99,[{"filename":"a","additions":5000,"deletions":0,"status":"modified","patch":"x"}]); B.cmd_card()
+c99,_=cards()[-1]
+check("35 one owner's veto on a huge vote is a stalemate, not a rejection", lambda: (D.react(c99["id"], OW1, "❌"), B.check_cards(cfg, B.load_settings(cfg)[0], B.find_cards(cfg, D.me)), cards()[-1][1]["state"]=="open")[2])
+check("36 both owners' vetoes reject a huge vote", lambda: (D.react(c99["id"], OW2, "❌"), B.check_cards(cfg, B.load_settings(cfg)[0], B.find_cards(cfg, D.me)), cards()[-1][1]["state"]=="rejected")[2])
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
