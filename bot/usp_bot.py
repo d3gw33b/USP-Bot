@@ -1129,12 +1129,13 @@ def kept(m):
 
 
 def clear_messages(cfg, channel_id, n, keep=()):
-    """Deletes the bot's last n messages in a channel. Returns how many it found."""
+    """Deletes the last n bot messages and !usp commands in a channel. Returns how many it found."""
     me, found, before = bot_id(), [], None
     for _ in range(10):  # looks back up to 1000 messages
         page = dc("GET", f"/channels/{channel_id}/messages?limit=100" + (f"&before={before}" if before else ""))
         for m in page:
-            if len(found) < n and m["author"]["id"] == me and m["id"] not in keep and not kept(m):
+            is_command = m.get("content", "").lower().startswith("!usp")  # people's !usp commands go too
+            if len(found) < n and (m["author"]["id"] == me or is_command) and m["id"] not in keep and not kept(m):
                 found.append(m["id"])
         if len(found) >= n or len(page) < 100:
             break
