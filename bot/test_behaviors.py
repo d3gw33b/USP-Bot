@@ -268,5 +268,11 @@ def clear_settings_keeps_cards():
 check("48 clear never deletes the settings or help card", clear_settings_keeps_cards)
 check("49 decision cards no longer tell owners to finish on GitHub", lambda: "on GitHub or ask for changes" not in open(B.__file__).read() and "can now merge it on GitHub" not in open(B.__file__).read())
 check("50 !usp commands shows the help", lambda: "help_link" in B.handle_command.__code__.co_names or "pinned" in say("!usp commands", ch="11") or "commands" in say("!usp commands", ch="11"))
+def clear_result_clears():
+    REMOVALS.clear()
+    say("!usp clear 1", who=OW1, ch="11")
+    reply_id=D.ch["11"][-1]["id"]
+    return any(secs>0 and reply_id in ids for _,ids,secs in REMOVALS)
+check("51 a clear result clears itself, even in mod chat", clear_result_clears)
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
