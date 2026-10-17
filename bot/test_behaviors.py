@@ -339,5 +339,12 @@ def waiting_merges():
         B.gh, B.time.sleep = saved_gh, saved_sleep
     return ok and any("pulls/161/merge" in x for x in MERGES)
 check("59 the live bot merges a waiting owner's PR once usp/vote turns green", waiting_merges)
+def clear_takes_commands():
+    REMOVALS.clear(); B.BOT_ID.clear()
+    D.ch.setdefault("11",[]).append({"id":D.nid(),"author":{"id":MOD1},"content":"!usp voters","embeds":[]})
+    cmd_id=D.ch["11"][-1]["id"]
+    say("!usp clear 2", who=OW1, ch="11")
+    return any(cmd_id in ids for _,ids,_ in REMOVALS)
+check("60 clear also removes people's !usp commands in its range", clear_takes_commands)
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
