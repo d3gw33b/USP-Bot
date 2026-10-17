@@ -179,6 +179,7 @@ class Live:
         B.ensure_help(self.cfg, self.me)
         cards = B.find_cards(self.cfg, self.me)
         n = B.read_commands(self.cfg, self.settings, cards, B.now_ms(), self.seen)
+        B.check_requests(self.cfg, self.settings, cards)
         B.check_cards(self.cfg, self.settings, cards)
         self.synced = True
         self.settings["live"] = True
@@ -196,10 +197,19 @@ class Live:
                 self.save()
 
     def on_reaction(self, d):
-        if d.get("channel_id") != self.cfg["ch"]["voting"] or d.get("user_id") == self.me:
+        if d.get("channel_id") not in self.chans or d.get("user_id") == self.me:
             return
         m = B.dc("GET", f"/channels/{d['channel_id']}/messages/{d['message_id']}")
-        if m["author"]["id"] != self.me or not m.get("embeds"):
+        if m["author"]["id"] != self.me:
+            return
+        m.setdefault("channel_id", d["channel_id"])
+        before = json.dumps(self.settings, sort_keys=True)
+        if B.answer_request(self.cfg, self.settings, B.find_cards(self.cfg, self.me), m):
+            print("Answered a request.")
+            if json.dumps(self.settings, sort_keys=True) != before:
+                self.save()
+            return
+        if d["channel_id"] != self.cfg["ch"]["voting"] or not m.get("embeds"):
             return
         st = B.parse_card(m["embeds"][0])
         if st and st["state"] == "open" and B.check_card(self.cfg, self.settings, m, st, B.now_ms() // 1000):

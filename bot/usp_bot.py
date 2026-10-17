@@ -24,6 +24,7 @@ DISCORD = "https://discord.com/api/v10"
 UA = "DiscordBot (https://github.com/d3gw33b/USP-Bot, 1)"
 SETTINGS_MARK = "USP-BOT-SETTINGS"  # the older plain-text settings message; converted on first sight
 SETTINGS_TITLE = "⚙️ USP bot settings"
+WHITELIST_FIELD = "Whitelisted (owner commands without asking)"
 DISCORD_EPOCH = 1420070400000
 LIVE_FRESH_MS = 180_000  # the scheduled check stands back while the live bot has checked in this recently
 YES, MEH, NO = "✅", "🤷", "❌"
@@ -48,6 +49,7 @@ DEFAULT_SETTINGS = {
     # seconds before the bot removes its reply and the command that asked for it; 0 keeps it
     "timers": {"command": 5, "summary": 0, "help": 0},
     "github_owners": [],
+    "whitelist": [],  # Discord ids that may use owner commands without asking (not approve, deny or veto)
     # Overrides change how new votes are decided without touching the defaults above.
     # scope -> {"mode": lazy|democratic|owner1|owner2|auto or None, "hours": float or None}
     "override_on": False,
@@ -233,7 +235,9 @@ def settings_embed(s):
                {"name": "Auto-delete",
                 "value": " · ".join(f"{k} {v}s" if v else f"{k} off" for k, v in s["timers"].items())},
                {"name": "Owner GitHub accounts (no vote needed)",
-                "value": " ".join(f"`{g}`" for g in s["github_owners"]) or "Only the repository owner. Add more with `!usp github-owners add <name>`."}]
+                "value": " ".join(f"`{g}`" for g in s["github_owners"]) or "Only the repository owner. Add more with `!usp github-owners add <name>`."},
+               {"name": WHITELIST_FIELD,
+                "value": ", ".join(f"<@{v}>" for v in s["whitelist"]) or "Nobody. Owners add people with `!usp whitelist add @name`."}]
     return {"title": SETTINGS_TITLE, "color": 0x5865F2, "fields": fields,
             "description": "Change these with `!usp` commands. `!usp help` lists them.",
             "footer": {"text": "🟢 Online, replies instantly · last check" if s.get("live") else "Checks every 15 minutes · last check"},
@@ -273,6 +277,7 @@ def parse_settings(e):
                         o["hours"] = round(parse_hours(bit[:-6]), 4)
                 s["overrides"][names[m.group(1)]] = o
     s["github_owners"] = re.findall(r"`([A-Za-z0-9-]+)`", f.get("Owner GitHub accounts (no vote needed)", ""))
+    s["whitelist"] = re.findall(r"<@!?(\d+)>", f.get(WHITELIST_FIELD, ""))
     if s["tiers"]["tiny"]["hours"] == 0.5 and s["tiers"]["small"]["hours"] == 0.75:  # the first defaults were too slow
         s["tiers"]["tiny"]["hours"], s["tiers"]["small"]["hours"] = 0.0833, 0.25
     s["cursor"] = from_iso(e["timestamp"]) if e.get("timestamp") else 0
@@ -695,16 +700,21 @@ HELP_TITLE = "📖 USP bot commands"
 HELP = """Type these in the bot settings channel, mod chat or the voting channel. The bot answers at once while it's online, otherwise within 15 minutes. `usp#12` means USP pull request 12, `tools#12` USP-tools, and `bot#12` USP-Bot.
 
 **Anyone**
-`!usp help`: where this list is
+`!usp help` or `!usp commands`: where this list is
 `!usp status usp#12`: how a vote is going
-`!usp voters` · `!usp tiers` · `!usp model` · `!usp override`: show the current settings
+`!usp voters` · `!usp tiers` · `!usp model` · `!usp override` · `!usp whitelist`: show the current settings
 
 **Voters and owners**
 `!usp vote usp#12`: turns a tiny or small change into a proper majority vote
 `!usp escalate usp#12`: makes a vote need an owner's ✅
 
 **Owners only**
-`!usp approve usp#12` · `!usp deny usp#12` · `!usp veto usp#12`
+`!usp approve usp#12` · `!usp deny usp#12` · `!usp veto usp#12`: only the owners themselves
+
+**Owner commands**
+The owners and whitelisted members run these straight away. When anyone else tries one, the bot asks the owners instead: an owner's ✅ on that message runs it and ❌ cancels.
+`!usp whitelist add @name` · `!usp whitelist remove @name`: lets someone run owner commands without asking (not approve, deny or veto)
+`!usp clear 20`: deletes the bot's last 20 messages in that channel. In the settings and voting channels it asks "are you sure?" first, and only an owner's or whitelisted member's ✅ goes ahead. Pinned messages, the settings and help cards, open votes and waiting requests are never deleted.
 `!usp voters add @name` · `!usp voters remove @name`
 `!usp github-owners add <github name>`: that account's pull requests skip the vote (the repo owner's always do)
 `!usp tier small time 15m` · `!usp tier medium lines 500`: change a size's default timer or line limit (sizes: tiny, small, medium, large, very_large)
@@ -713,7 +723,7 @@ HELP = """Type these in the bot settings channel, mod chat or the voting channel
 `!usp model set gemma`: the AI that writes summaries: `gemma`, `gemma-small`, `qwen`, `llama`, `gemini` or `off` (or an exact name)
 `!usp ping here on` / `off`: @here in mod chat for new votes
 
-**Override (owners only)**
+**Override (an owner command)**
 Changes how votes are decided without touching the defaults. Turn it off and the defaults are back.
 `!usp override <size> <how>`, for example `!usp override small auto`
 • sizes: `small` (tiny and small), `medium`, `large`, `huge`, `all` (every size), `owners` (pull requests opened by an owner, including Claude's)
@@ -895,8 +905,7 @@ def announce(cfg, m, st, state, reason, extra=()):
     word = {"approved": "✅ APPROVED", "rejected": "❌ REJECTED", "expired": "⌛ EXPIRED"}[state]
     tag = short(st["repo"], st["pr"])
     dc("POST", f"/channels/{cfg['ch']['voting']}/messages", {
-        "embeds": [{"title": f"Decision for {tag}: {word}", "description": f"Reason: {reason}.\n"
-                    + ("An owner can now merge it on GitHub." if state == "approved" else "An owner should close it on GitHub or ask for changes.")
+        "embeds": [{"title": f"Decision for {tag}: {word}", "description": f"Reason: {reason}."
                     + "".join(f"\n{line}" for line in extra),
                     "color": COLOR.get(state, 0x95A5A6)}],
         "message_reference": {"message_id": m["id"], "fail_if_not_exists": False}, "allowed_mentions": {"parse": []}})
@@ -1029,17 +1038,64 @@ def make_summary(settings, st):
     return out.strip()[:2600]
 
 
+class Ask(str):
+    """A reply that waits for a ✅ or ❌ under it. kind is "request" (an owner's word) or "confirm" (are you sure)."""
+    def __new__(cls, text, kind):
+        s = super().__new__(cls, text)
+        s.kind = kind
+        return s
+
+
+ASK_RE = re.compile(r"`(!usp[^`]*)`.*\n-# (request|confirm) (\d+) (\d+)$", re.S)
+BOT_ID = {}
+
+
+def bot_id():
+    if "id" not in BOT_ID:
+        BOT_ID["id"] = dc("GET", "/users/@me")["id"]
+    return BOT_ID["id"]
+
+
+def kept(m):
+    """Messages `!usp clear` never deletes: pins, the settings and help cards, open votes and waiting requests."""
+    e = (m.get("embeds") or [{}])[0]
+    st = parse_card(e) if m.get("embeds") else None
+    return (m.get("pinned") or e.get("title") in (SETTINGS_TITLE, HELP_TITLE)
+            or (st and st["state"] == "open") or bool(ASK_RE.search(m.get("content", ""))))
+
+
+def clear_messages(cfg, channel_id, n, keep=()):
+    """Deletes the bot's last n messages in a channel. Returns how many it found."""
+    me, found, before = bot_id(), [], None
+    for _ in range(10):  # looks back up to 1000 messages
+        page = dc("GET", f"/channels/{channel_id}/messages?limit=100" + (f"&before={before}" if before else ""))
+        for m in page:
+            if len(found) < n and m["author"]["id"] == me and m["id"] not in keep and not kept(m):
+                found.append(m["id"])
+        if len(found) >= n or len(page) < 100:
+            break
+        before = page[-1]["id"]
+    if found:
+        remove_later(channel_id, found, 0)
+    return len(found)
+
+
 def handle_command(cfg, settings, cards, msg, now):
     """Returns the reply text. Changes settings or cards in place."""
     owners = set(cfg["owners"])
     uid = msg["author"]["id"]
-    is_owner = uid in owners
+    approved = msg.get("approved_by")  # an owner's ✅ on a request runs it with that owner's say-so
+    is_owner = uid in owners or bool(approved) or uid in settings["whitelist"]
     is_voter = is_owner or uid in settings["voters"]
     words = msg["content"].strip().split()[1:]
-    if not words or words[0] == "help":
+    if not words or words[0].lower() in ("help", "commands"):
         return f"The full list is pinned in the bot settings channel: {cfg['help_link']}" if cfg.get("help_link") else HELP
     w = [x.lower() for x in words]
-    only_owners = "Only the two owners can do that."
+    only_owners = "Only the two owners can approve, deny or veto."
+    cmd = " ".join(msg["content"].split()).replace("`", "'")[:200]
+
+    def need_owner():
+        return Ask(f"🔐 <@{uid}> asked for `{cmd}`. That's an owner command, so an owner's ✅ here runs it and ❌ cancels.", "request")
 
     if w[0] == "status" and len(w) > 1:
         hit = ref_card(cards, w[1])
@@ -1085,7 +1141,7 @@ def handle_command(cfg, settings, cards, msg, now):
         return f"**Plain version of {short(st['repo'], st['pr'])}**\n{plain[:1500]}\n\n{DISCLAIMER}"
     if w[0] == "timer" and len(w) > 2:
         if not is_owner:
-            return only_owners
+            return need_owner()
         if w[1] not in settings["timers"]:
             return "The kinds are `command`, `summary` and `help`."
         secs = 0 if w[2] == "off" else (int(w[2]) if w[2].isdigit() else None)
@@ -1097,7 +1153,7 @@ def handle_command(cfg, settings, cards, msg, now):
         if len(w) == 1 or w[1] == "list":
             return "Voters: " + (", ".join(f"<@{v}>" for v in settings["voters"]) or "none yet") + ". Owners always count."
         if not is_owner:
-            return only_owners
+            return need_owner()
         ids = re.findall(r"\d{15,21}", " ".join(words[2:]))
         if not ids:
             return "Mention someone or give their user ID."
@@ -1111,7 +1167,7 @@ def handle_command(cfg, settings, cards, msg, now):
                          f"timer {settings['tiers'][t]['hours']}h, {MODE_TEXT[TIER_MODE[t]]}" for t in TIER_ORDER)
     if w[0] == "tier":
         if not is_owner:
-            return only_owners
+            return need_owner()
         if len(w) < 4 or w[1] not in TIER_ORDER or w[2] not in ("lines", "time"):
             return "Use `!usp tier <tiny|small|medium|large|very_large> lines <n>` or `time <30m|6h|2d>`."
         if w[2] == "lines":
@@ -1129,7 +1185,7 @@ def handle_command(cfg, settings, cards, msg, now):
             return (f"Current model: `{settings['model']}`. Simple: gemma, gemma-small, qwen, llama, gemini, off. "
                     f"Exact: {', '.join(LOCAL_MODELS)}, `hf:owner/repo/file.gguf`, or a Gemini name like `gemini-2.5-flash`.")
         if not is_owner:
-            return only_owners
+            return need_owner()
         name = " ".join(words[2:]) if w[1] == "set" else " ".join(words[1:])
         if not resolve_model(name):
             return "I don't know that model. Try `!usp model list`."
@@ -1142,7 +1198,7 @@ def handle_command(cfg, settings, cards, msg, now):
             return (f"Override is **{'on' if settings['override_on'] else 'off'}**.\n"
                     + (override_text(settings) or "Nothing set.") + "\n" + usage)
         if not is_owner:
-            return only_owners
+            return need_owner()
         if w[1] in ("on", "off"):
             settings["override_on"] = w[1] == "on"
             n = apply_override(cfg, settings, cards) if settings["override_on"] else 0
@@ -1182,7 +1238,7 @@ def handle_command(cfg, settings, cards, msg, now):
             return "Pull requests from these GitHub accounts skip the vote: " + (", ".join(f"`{g}`" for g in settings["github_owners"])
                     or "none added") + ". The repository owner always does."
         if not is_owner:
-            return only_owners
+            return need_owner()
         names = [n for n in words[2:] if re.fullmatch(r"[A-Za-z0-9-]{1,39}", n)]
         if w[1] not in ("add", "remove") or not names:
             return "Use `!usp github-owners add <github-name>` or `remove <github-name>`."
@@ -1190,9 +1246,32 @@ def handle_command(cfg, settings, cards, msg, now):
         keep = [g for g in settings["github_owners"] if g.lower() not in low]
         settings["github_owners"] = keep + (names if w[1] == "add" else [])
         return "Owner GitHub accounts now: " + (", ".join(f"`{g}`" for g in settings["github_owners"]) or "only the repository owner")
+    if w[0] == "whitelist":
+        if len(w) == 1 or w[1] == "list":
+            return ("Whitelisted: " + (", ".join(f"<@{v}>" for v in settings["whitelist"]) or "nobody")
+                    + ". They run owner commands without asking, but can't approve, deny or veto.")
+        if uid not in owners and not approved:  # whitelisted members can't hand the whitelist out themselves
+            return need_owner()
+        ids = re.findall(r"\d{15,21}", " ".join(words[2:]))
+        if w[1] not in ("add", "remove") or not ids:
+            return "Use `!usp whitelist add @name` or `!usp whitelist remove @name`."
+        keep = [v for v in settings["whitelist"] if v not in ids]
+        settings["whitelist"] = keep + (ids if w[1] == "add" else [])
+        return "Whitelisted now: " + (", ".join(f"<@{v}>" for v in settings["whitelist"]) or "nobody")
+    if w[0] == "clear":
+        if len(w) < 2 or not w[1].isdigit() or not 1 <= int(w[1]) <= 100:
+            return "Use `!usp clear <number>` (1 to 100): deletes the bot's last messages in this channel."
+        if not is_owner:
+            return need_owner()
+        n = int(w[1])
+        if msg["channel_id"] in (cfg["ch"]["settings"], cfg["ch"]["voting"]) and not approved and not msg.get("confirmed_by"):
+            return Ask(f"⚠️ **Are you sure?** `{cmd}` deletes the bot's last {n} messages in this channel. React ✅ to go ahead or ❌ to cancel. "
+                       "Only the owners' and whitelisted members' reactions count.", "confirm")
+        found = clear_messages(cfg, msg["channel_id"], n, keep={msg.get("prompt_id")})
+        return f"Deleting the bot's last {found} message(s) here." if found else "There are no messages of the bot's here to delete."
     if w[0] == "ping" and len(w) >= 3 and w[1] == "here":
         if not is_owner:
-            return only_owners
+            return need_owner()
         settings["ping_here"] = w[2] == "on"
         return f"@here for new votes is now {'on' if settings['ping_here'] else 'off'}."
     if w[0] in ("vote", "escalate", "approve", "deny", "veto") and len(w) > 1:
@@ -1211,7 +1290,7 @@ def handle_command(cfg, settings, cards, msg, now):
             if target == "owner1":
                 ping_owners(cfg, f"Owner approval was asked for on **{short(st['repo'], st['pr'])}**.", m["id"])
             return f"{short(st['repo'], st['pr'])} now: {MODE_TEXT[target]}."
-        if not is_owner:
+        if uid not in owners:
             return only_owners
         if w[0] in ("approve", "veto") and st["mode"] == "owner2":  # a huge change needs both owners to agree
             key = "approvals" if w[0] == "approve" else "vetoes"
@@ -1313,16 +1392,75 @@ def run_command(cfg, settings, cards, msg):
         print(f"command failed: {type(e).__name__}")
         reply = "Something went wrong running that command."
     words = msg["content"].lower().split()[1:]
-    kind = words[0] if words and words[0] in ("help", "summary") else "command"
+    kind = {"commands": "help"}.get(words[0], words[0]) if words and words[0] in ("help", "commands", "summary") else "command"
     secs = settings["timers"].get(kind, 0)
-    temp = secs > 0 and msg["channel_id"] != cfg["ch"]["mod"]  # mod chat keeps its replies
+    temp = secs > 0 and msg["channel_id"] != cfg["ch"]["mod"] and not isinstance(reply, Ask)  # mod chat keeps its replies
     if temp:
         reply = temp_prefix(cfg) + reply
+    if isinstance(reply, Ask):  # stays up until someone allowed answers it with a reaction
+        sent = dc("POST", f"/channels/{msg['channel_id']}/messages", {
+            "content": f"{reply}\n-# {reply.kind} {msg['author']['id']} {msg['id']}",
+            "message_reference": {"message_id": msg["id"], "fail_if_not_exists": False}, "allowed_mentions": {"parse": []}})
+        for emo in (YES, NO):
+            try:
+                dc("PUT", f"/channels/{msg['channel_id']}/messages/{sent['id']}/reactions/{urllib.parse.quote(emo)}/@me")
+            except Exception:
+                pass
+        return True
     sent = dc("POST", f"/channels/{msg['channel_id']}/messages", {"content": reply[:1990],
        "message_reference": {"message_id": msg["id"], "fail_if_not_exists": False}, "allowed_mentions": {"parse": []}})
     if temp:
         remove_later(msg["channel_id"], [sent["id"], msg["id"]], secs)
     return True
+
+
+def answer_request(cfg, settings, cards, m):
+    """Acts on a ✅ or ❌ under a request or are-you-sure message. Returns True once it's settled.
+    Requests count only the owners' reactions; are-you-sure also counts whitelisted members."""
+    hit = ASK_RE.search(m.get("content", ""))
+    if not hit or m["author"]["id"] != bot_id():
+        return False
+    cmd, kind, uid, cmd_id = hit.groups()
+    allowed = set(cfg["owners"]) | (set(settings["whitelist"]) if kind == "confirm" else set())
+    ch = m["channel_id"]
+
+    def first(emo):
+        try:
+            users = dc("GET", f"/channels/{ch}/messages/{m['id']}/reactions/{urllib.parse.quote(emo)}?limit=100")
+        except RuntimeError:
+            users = []
+        return next((u["id"] for u in users if u["id"] in allowed), None)
+    no, yes = first(NO), first(YES)
+    if not (yes or no):
+        return False
+    edit = lambda text: dc("PATCH", f"/channels/{ch}/messages/{m['id']}", {"content": text[:1990], "allowed_mentions": {"parse": []}})
+    if no:
+        edit(f"❌ Cancelled by <@{no}>: `{cmd}`.")
+    else:
+        edit(f"⏳ Running `{cmd}`.")  # no longer looks like a request, so it can't run twice
+        run = {"id": cmd_id, "channel_id": ch, "author": {"id": uid}, "content": cmd, "prompt_id": m["id"],
+               "approved_by" if kind == "request" else "confirmed_by": yes}
+        try:
+            out = handle_command(cfg, settings, cards, run, now_ms() // 1000)
+        except Exception as e:
+            print(f"command failed: {type(e).__name__}")
+            out = "Something went wrong running that command."
+        edit(f"✅ {'Approved' if kind == 'request' else 'Confirmed'} by <@{yes}>. {out}")
+    secs = settings["timers"].get("command", 0)
+    if secs and ch != cfg["ch"]["mod"]:
+        remove_later(ch, [m["id"], cmd_id], secs)
+    return True
+
+
+def check_requests(cfg, settings, cards):
+    """Answers requests that got their ✅ or ❌ while the bot wasn't watching."""
+    n = 0
+    for ch in dict.fromkeys(cfg["ch"][k] for k in ("settings", "mod", "voting")):
+        for m in dc("GET", f"/channels/{ch}/messages?limit=50"):
+            if ASK_RE.search(m.get("content", "")):
+                m.setdefault("channel_id", ch)
+                n += answer_request(cfg, settings, cards, m)
+    return n
 
 
 def read_commands(cfg, settings, cards, upto, seen=None):
@@ -1383,6 +1521,7 @@ def cmd_tick():
     ensure_help(cfg, me)
     cards = find_cards(cfg, me)
     handled = read_commands(cfg, settings, cards, start)
+    check_requests(cfg, settings, cards)
     decided = check_cards(cfg, settings, cards)
     settings["live"] = False
     save_settings(cfg, settings, sid)
