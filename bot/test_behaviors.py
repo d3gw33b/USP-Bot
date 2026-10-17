@@ -305,7 +305,7 @@ def merge_retry():
     return ok and calls[0]==3
 check("56 a merge GitHub isn't ready for is retried until it goes through", merge_retry)
 def sweep_test():
-    MERGES.clear()
+    MERGES.clear(); B.REPOS["at"]=0
     say("!usp automerge on d3gw33b", who=OW1)
     saved_gh_all, saved_gh = B.gh_all, B.gh
     B.gh_all=lambda path: [{"full_name":"d3gw33b/USP","archived":False}] if path.startswith("/user/repos") else [{"number":151,"user":{"login":"d3gw33b"},"head":{"sha":"s1"}}]
@@ -322,23 +322,27 @@ def clear_result_clears():
     reply_id=D.ch["11"][-1]["id"]
     return any(secs>0 and reply_id in ids for _,ids,secs in REMOVALS)
 check("51 a clear result clears itself, even in mod chat", clear_result_clears)
-def tag_posted():
-    return any(m["content"].startswith(B.AUTOMERGE_TAG) for m in D.ch.get("11",[]))
-check("58 an owner's no-vote merge tells the live bot to merge it at once", lambda: say("!usp automerge on d3gw33b", who=OW1) and (make_pr(160,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="d3gw33b"), B.cmd_card(), tag_posted())[2])
-def waiting_merges():
-    MERGES.clear(); seen=[0]
-    def fake_gh(path, raw=False, accept=None):
-        if path.endswith("/pulls/161"): return {"state":"open","head":{"sha":"s2"},"user":{"login":"d3gw33b"}}
-        seen[0]+=1
-        return [{"context":"usp/vote","state":"success" if seen[0]>2 else "pending"}]
-    saved_gh, saved_sleep = B.gh, B.time.sleep
-    B.gh=fake_gh; B.time.sleep=lambda sec: None
+def no_note_posted():
+    say("!usp automerge on d3gw33b", who=OW1)
+    before=len(D.ch.get("11",[]))
+    make_pr(160,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="d3gw33b"); B.cmd_card()
+    return len(D.ch.get("11",[]))==before
+check("58 an owner's no-vote merge posts nothing in mod chat", no_note_posted)
+def repos_cached():
+    MERGES.clear(); B.REPOS["at"]=0; looked=[0]
+    def fake_all(path):
+        if path.startswith("/user/repos"):
+            looked[0]+=1
+            return [{"full_name":"d3gw33b/USP","archived":False}]
+        return [{"number":161,"user":{"login":"d3gw33b"},"head":{"sha":"s2"}}]
+    saved_gh_all, saved_gh = B.gh_all, B.gh
+    B.gh_all=fake_all; B.gh=lambda path, raw=False, accept=None: [{"context":"usp/vote","state":"success"}]
     try:
-        ok=B.merge_waiting(saved(), "d3gw33b/USP#161")
+        B.sweep_automerge(cfg, saved()); B.sweep_automerge(cfg, saved())
     finally:
-        B.gh, B.time.sleep = saved_gh, saved_sleep
-    return ok and any("pulls/161/merge" in x for x in MERGES)
-check("59 the live bot merges a waiting owner's PR once usp/vote turns green", waiting_merges)
+        B.gh_all, B.gh = saved_gh_all, saved_gh
+    return looked[0]==1 and any("pulls/161/merge" in x for x in MERGES)
+check("59 the quick sweep looks up the owner's repositories once, then merges green owner PRs", repos_cached)
 def clear_takes_commands():
     REMOVALS.clear(); B.BOT_ID.clear()
     D.ch.setdefault("11",[]).append({"id":D.nid(),"author":{"id":MOD1},"content":"!usp voters","embeds":[]})
