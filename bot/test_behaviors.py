@@ -161,5 +161,8 @@ card_ids={m["id"] for m,_ in cards()}
 check("28 vote cards are never scheduled for deletion", lambda: not any(i in card_ids for _,ids,_ in REMOVALS for i in ids))
 check("29 approve merges the pull request", lambda: any("pulls/93/merge" in x for x in MERGES))
 check("30 a deny does not merge", lambda: not any("pulls/92/merge" in x for x in MERGES))
+make_pr(98,[{"filename":"a","additions":5000,"deletions":0,"status":"modified","patch":"x"}]); B.cmd_card()
+check("31 a huge vote waits for the second owner", lambda: "needs both owners" in say("!usp approve usp#98", who=OW1) and cards()[-1][1]["state"]=="open")
+check("32 a huge vote passes when both owners approve", lambda: (say("!usp approve usp#98", who=OW2), cards()[-1][1]["state"]=="approved" and any("pulls/98/merge" in x for x in MERGES))[1])
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))

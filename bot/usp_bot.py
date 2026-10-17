@@ -1205,6 +1205,12 @@ def handle_command(cfg, settings, cards, msg, now):
             return f"{short(st['repo'], st['pr'])} now: {MODE_TEXT[target]}."
         if not is_owner:
             return only_owners
+        if w[0] == "approve" and st["mode"] == "owner2":  # a huge change needs both owners
+            got = settings.setdefault("approvals", {}).setdefault(m["id"], [])
+            if uid not in got:
+                got.append(uid)
+            if any(o not in got for o in cfg["owners"]):
+                return f"{short(st['repo'], st['pr'])} needs both owners. Your approval is recorded; waiting for the other owner."
         state = "approved" if w[0] == "approve" else "rejected"
         reason = {"approve": "approved by an owner", "deny": "denied by an owner", "veto": "vetoed by an owner"}[w[0]]
         st["state"] = state
