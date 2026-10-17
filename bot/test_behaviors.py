@@ -1,6 +1,6 @@
 # Offline checks of the bot's behaviour, with a fake Discord and a fake GitHub.
 # Run from the repo: python3 bot/test_behaviors.py
-import sys, json, os, re, time
+import sys, json, os, re, time, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import usp_bot as B
 CLOCK=[1_790_000_000_000]
 B.now_ms=lambda: CLOCK[0]
@@ -50,7 +50,8 @@ os.environ.update(DISCORD_BOT_TOKEN="t", DISCORD_OWNER_IDS=f"{OW1},{OW2}", DISCO
 def make_pr(num, files, msg="x\n\nAgreed-to: CONTRIBUTING.md#contributor-agreement", who="bob"):
     ev={"pull_request":{"number":num,"title":f"PR {num} @everyone","body":"b","html_url":f"https://github.com/d3gw33b/USP/pull/{num}",
         "user":{"login":who,"avatar_url":"a","html_url":"u"}}}
-    json.dump(ev,open("ev.json","w")); os.environ["GITHUB_EVENT_PATH"]="ev.json"
+    path=os.path.join(tempfile.gettempdir(), "usp_test_event.json")
+    json.dump(ev,open(path,"w")); os.environ["GITHUB_EVENT_PATH"]=path
     def gh(path, raw=False, accept=None):
         if raw: return b"diff"
         if "/files" in path: return files if "page=1" in path else []
@@ -79,9 +80,11 @@ SUMDIR=os.path.join(tempfile.mkdtemp(), "usp-summary")
 os.environ["USP_SUMMARY_DIR"]=SUMDIR
 os.environ["GITHUB_TOKEN"]="t"
 PATCHES=[]
+MERGES=[]
 real_http=B.http
 def fake_http(method, url, body=None, headers=None, raw=False, tries=5):
     if method=="PATCH" and "/pulls/" in url: PATCHES.append((url, body)); return {}
+    if method=="PUT" and url.endswith("/merge"): MERGES.append(url); return {}
     if "api.github.com" in url and method=="POST" and "/statuses/" in url: return {}
     return real_http(method, url, body, headers, raw, tries)
 B.http=fake_http
@@ -94,7 +97,7 @@ def say(text, who=OW1, ch="33"):
     m=D.user_msg(ch,who,text); live.on_message(m); return D.ch[ch][-1]["content"]
 
 gh_files=[{"filename":".github/workflows/x.yml","additions":3,"deletions":2,"status":"modified","patch":"x"}]
-check("1 .github change floor is large, not very large", lambda: B.analyse(gh_files,[])[3]=="large")
+check("1 .github change is sized by its lines, not forced to large", lambda: B.analyse(gh_files,[])[3]=="tiny")
 check("2 override owners vote sets overrides on", lambda: say("!usp override owners vote") and saved()["override_on"] is True)
 check("3 override off turns them off", lambda: (say("!usp override off"), saved()["override_on"])[1] is False)
 check("4 timer defaults: command 5s, summary off, help off", lambda: B.DEFAULT_SETTINGS["timers"]=={"command":5,"summary":0,"help":0})
@@ -130,5 +133,46 @@ check("17 help command replies", lambda: len(say("!usp help"))>0)
 check("18 team result text says THE TEAM HAS SPOKEN", lambda: "THE TEAM HAS SPOKEN" in open(os.path.join(os.path.dirname(B.__file__),"usp_bot.py")).read())
 check("19 owner decisions are listed separately", lambda: all(w in open(os.path.join(os.path.dirname(B.__file__),"usp_bot.py")).read() for w in ["in agreement","has VETOED","has no opinion"]))
 check("20 bot reloads on any change to its files (content hash)", lambda: "hashlib.sha256" in open(os.path.join(os.path.dirname(B.__file__),"usp_live.py")).read())
+REMOVALS=[]
+B.remove_later=lambda ch, ids, secs: REMOVALS.append((ch, ids, secs))
+def card_ends(num, files):
+    make_pr(num, files); B.cmd_card()
+    return cards()[-1]
+check("21 tiny vote ends in 5 minutes", lambda: (lambda c: c[1]["deadline"]-CLOCK[0]//1000)(card_ends(94,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}]))==300)
+check("22 small vote ends in 15 minutes", lambda: (lambda c: c[1]["deadline"]-CLOCK[0]//1000)(card_ends(95,[{"filename":"a","additions":50,"deletions":0,"status":"modified","patch":"x"}]))==900)
+def owner_yes_passes(num, files):
+    c,_=card_ends(num, files)
+    D.react(c["id"], OW1, "✅")
+    B.check_cards(cfg, B.load_settings(cfg)[0], B.find_cards(cfg, D.me))
+    return cards()[-1][1]["state"]
+check("23 owner ✅ passes a tiny vote at once", lambda: owner_yes_passes(96,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}])=="approved")
+check("24 owner ✅ passes a small vote at once", lambda: owner_yes_passes(97,[{"filename":"a","additions":50,"deletions":0,"status":"modified","patch":"x"}])=="approved")
+REMOVALS.clear()
+say("!usp help", ch="22")
+say("!usp summary usp#94", ch="22")
+check("25 help and summary replies are not auto-deleted by default", lambda: REMOVALS==[])
+REMOVALS.clear()
+say("!usp voters", ch="22")
+check("26 a command in voting gets the 5 second delete", lambda: [r[2] for r in REMOVALS]==[5])
+REMOVALS.clear()
+say("!usp voters", ch="11")
+check("27 mod chat is exempt from auto-delete", lambda: REMOVALS==[] and not D.ch["11"][-1]["content"].startswith("<"))
+card_ids={m["id"] for m,_ in cards()}
+check("28 vote cards are never scheduled for deletion", lambda: not any(i in card_ids for _,ids,_ in REMOVALS for i in ids))
+check("29 approve merges the pull request", lambda: any("pulls/93/merge" in x for x in MERGES))
+check("30 a deny does not merge", lambda: not any("pulls/92/merge" in x for x in MERGES))
+make_pr(98,[{"filename":"a","additions":5000,"deletions":0,"status":"modified","patch":"x"}]); B.cmd_card()
+check("31 a huge vote waits for the second owner", lambda: "needs both owners" in say("!usp approve usp#98", who=OW1) and cards()[-1][1]["state"]=="open")
+check("32 a huge vote passes when both owners approve", lambda: (say("!usp approve usp#98", who=OW2), cards()[-1][1]["state"]=="approved" and any("pulls/98/merge" in x for x in MERGES))[1])
+import threading as _th
+_real_live=L.Live; _tries=[0]
+def _flaky(cfg):
+    _tries[0]+=1
+    if _tries[0]<3: raise OSError("connection reset")
+    return "live"
+L.Live=_flaky
+check("33 startup retries while Discord can't be reached", lambda: L.start_live(cfg, _th.Event(), pause=0)=="live" and _tries[0]==3)
+L.Live=_real_live
+check("34 offline past the limit asks for a restart", lambda: L.should_restart(0, L.WATCHDOG_AFTER+1) and not L.should_restart(0, L.WATCHDOG_AFTER-1) and not L.should_restart(None, 10**9))
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
