@@ -136,10 +136,21 @@ def gh_all(path):
 # -------------------------------------------------------------------------------------- config
 
 def env_config():
-    owners = [x.strip() for x in os.environ.get("DISCORD_OWNER_IDS", "").split(",") if x.strip()]
-    ch = dict(kv.split("=", 1) for kv in os.environ.get("DISCORD_CHANNEL_IDS", "").replace(" ", "").split(",") if "=" in kv)
-    missing = [k for k in ("mod", "voting", "settings") if k not in ch]
-    if not os.environ.get("DISCORD_BOT_TOKEN") or not owners or missing:
+    """The bot's Discord settings from the environment. Tolerates spaces, new lines, quotes and capitals."""
+    def parts(name):
+        raw = re.sub(r"\s*[:=]\s*", "=", os.environ.get(name, "").strip().strip('"\''))
+        return [x.strip('"\'') for x in re.split(r"[,;\s]+", raw) if x.strip('"\'')]
+    owners = parts("DISCORD_OWNER_IDS")
+    ch = {}
+    for kv in parts("DISCORD_CHANNEL_IDS"):
+        k, sep, v = kv.partition("=")
+        if sep:
+            ch[k.lower()] = v
+    missing = [] if os.environ.get("DISCORD_BOT_TOKEN", "").strip() else ["DISCORD_BOT_TOKEN"]
+    missing += [] if owners else ["DISCORD_OWNER_IDS"]
+    missing += [f"DISCORD_CHANNEL_IDS {k}=" for k in ("mod", "voting", "settings") if k not in ch]
+    if missing:
+        print("Bot secrets missing or unreadable: " + ", ".join(missing), file=sys.stderr)
         return None
     return {"owners": owners, "ch": ch}
 
