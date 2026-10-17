@@ -17,7 +17,7 @@ Environment:
 
 This file runs in a public repo. Never print pull request content, summaries or settings to the log.
 """
-import json, os, re, sys, time, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, glob
+import json, os, re, sys, time, random, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, glob
 from datetime import datetime, timezone
 
 DISCORD = "https://discord.com/api/v10"
@@ -45,6 +45,8 @@ DEFAULT_SETTINGS = {
     },
     "model": "gemma",
     "ping_here": False,
+    # seconds before the bot removes its reply and the command that asked for it; 0 keeps it
+    "timers": {"command": 5, "summary": 0, "help": 0},
     "github_owners": [],
     # Overrides change how new votes are decided without touching the defaults above.
     # scope -> {"mode": lazy|democratic|owner1|owner2|auto or None, "hours": float or None}
@@ -217,6 +219,8 @@ def settings_embed(s):
                {"name": "@here in mod chat", "value": "On" if s["ping_here"] else "Off", "inline": True},
                {"name": "Override: " + ("ON" if s["override_on"] else "OFF"),
                 "value": override_text(s) or "Nothing set. Owners can use `!usp override` (see the help card)."},
+               {"name": "Auto-delete",
+                "value": " · ".join(f"{k} {v}s" if v else f"{k} off" for k, v in s["timers"].items())},
                {"name": "Owner GitHub accounts (no vote needed)",
                 "value": " ".join(f"`{g}`" for g in s["github_owners"]) or "Only the repository owner. Add more with `!usp github-owners add <name>`."}]
     return {"title": SETTINGS_TITLE, "color": 0x5865F2, "fields": fields,
@@ -235,6 +239,10 @@ def parse_settings(e):
         m = re.match(r"\*\*(.+?)\*\*: (?:up to (\d+) lines|any size) · (\S+) vote", line)
         if m and m.group(1) in names and parse_hours(m.group(3)):
             s["tiers"][names[m.group(1)]] = {"max": int(m.group(2)) if m.group(2) else None, "hours": round(parse_hours(m.group(3)), 4)}
+    for part in f.get("Auto-delete", "").split("·"):
+        bits = part.split()
+        if len(bits) == 2 and bits[0] in s["timers"]:
+            s["timers"][bits[0]] = int(bits[1][:-1]) if bits[1].endswith("s") and bits[1][:-1].isdigit() else 0
     if "AI model" in f:
         s["model"] = f["AI model"].strip("` ")
     s["ping_here"] = f.get("@here in mod chat", "Off").strip().lower() == "on"
@@ -653,6 +661,7 @@ HELP = """Type these in the bot settings channel, mod chat or the voting channel
 `!usp voters add @name` · `!usp voters remove @name`
 `!usp github-owners add <github name>`: that account's pull requests skip the vote (the repo owner's always do)
 `!usp tier small time 15m` · `!usp tier medium lines 500`: change a size's default timer or line limit (sizes: tiny, small, medium, large, very_large)
+`!usp timer command 5`: the bot's replies to commands disappear after that many seconds, with the command (`off` keeps them)
 `!usp summary usp#12`: a summary of an open vote, from its card or written now by the bot's own model
 `!usp model set gemma`: the AI that writes summaries: `gemma`, `gemma-small`, `qwen`, `llama`, `gemini` or `off` (or an exact name)
 `!usp ping here on` / `off`: @here in mod chat for new votes
@@ -913,6 +922,16 @@ def handle_command(cfg, settings, cards, msg, now):
             tldr = [ln for ln in text.splitlines() if ln.lower().startswith("tl;dr")]
             plain = (tldr[0] if tldr else text[:400]).replace("TL;DR:", "").strip()
         return f"**Plain version of {short(st['repo'], st['pr'])}**\n{plain[:1500]}\n\n{DISCLAIMER}"
+    if w[0] == "timer" and len(w) > 2:
+        if not is_owner:
+            return only_owners
+        if w[1] not in settings["timers"]:
+            return "The kinds are `command`, `summary` and `help`."
+        secs = 0 if w[2] == "off" else (int(w[2]) if w[2].isdigit() else None)
+        if secs is None or secs > 600:
+            return "Give a number of seconds up to 600, or `off`."
+        settings["timers"][w[1]] = secs
+        return f"{w[1]} replies now disappear after {secs} seconds." if secs else f"{w[1]} replies stay."
     if w[0] == "voters":
         if len(w) == 1 or w[1] == "list":
             return "Voters: " + (", ".join(f"<@{v}>" for v in settings["voters"]) or "none yet") + ". Owners always count."
@@ -1079,6 +1098,39 @@ def ensure_help(cfg, me):
     cfg["help_link"] = f"https://discord.com/channels/{guild}/{ch}/{card['id']}"
 
 
+TEMP_EMOJIS = ["beachball", "loading", "loading1", "loadingdots", "petclaude", "weed"]
+EMOJI_CACHE = {}
+IN_TICK = False  # the scheduled run exits when it finishes, so it waits out timers itself
+
+
+def temp_prefix(cfg):
+    """A random one of the server's emojis, marking a message that will disappear. Empty if none found."""
+    if "list" not in EMOJI_CACHE:
+        try:
+            gid = dc("GET", f"/channels/{cfg['ch']['voting']}").get("guild_id")
+            EMOJI_CACHE["list"] = [f"<{'a' if e.get('animated') else ''}:{e['name']}:{e['id']}>"
+                                   for e in dc("GET", f"/guilds/{gid}/emojis") if e.get("name") in TEMP_EMOJIS]
+        except Exception as e:
+            print(f"emoji lookup failed: {type(e).__name__}")
+            EMOJI_CACHE["list"] = []
+    return random.choice(EMOJI_CACHE["list"]) + " " if EMOJI_CACHE["list"] else ""
+
+
+def remove_later(channel_id, ids, seconds):
+    """Deletes the bot's reply and the command that asked for it after a while."""
+    def job():
+        for i in ids:
+            try:
+                dc("DELETE", f"/channels/{channel_id}/messages/{i}")
+            except Exception as e:
+                print(f"could not remove a message: {type(e).__name__}")
+    if IN_TICK:
+        time.sleep(seconds)
+        job()
+    else:
+        threading.Timer(seconds, job).start()
+
+
 def run_command(cfg, settings, cards, msg):
     """Answers one !usp message. Returns True if it was a command."""
     if msg["author"].get("bot") or not msg.get("content", "").lower().startswith("!usp"):
@@ -1088,8 +1140,16 @@ def run_command(cfg, settings, cards, msg):
     except Exception as e:
         print(f"command failed: {type(e).__name__}")
         reply = "Something went wrong running that command."
-    dc("POST", f"/channels/{msg['channel_id']}/messages", {"content": reply[:1990],
+    words = msg["content"].lower().split()[1:]
+    kind = words[0] if words and words[0] in ("help", "summary") else "command"
+    secs = settings["timers"].get(kind, 0)
+    temp = secs > 0 and msg["channel_id"] != cfg["ch"]["mod"]  # mod chat keeps its replies
+    if temp:
+        reply = temp_prefix(cfg) + reply
+    sent = dc("POST", f"/channels/{msg['channel_id']}/messages", {"content": reply[:1990],
        "message_reference": {"message_id": msg["id"], "fail_if_not_exists": False}, "allowed_mentions": {"parse": []}})
+    if temp:
+        remove_later(msg["channel_id"], [sent["id"], msg["id"]], secs)
     return True
 
 
@@ -1133,6 +1193,8 @@ def check_cards(cfg, settings, cards):
 
 
 def cmd_tick():
+    global IN_TICK
+    IN_TICK = True
     cfg = env_config()
     if not cfg:
         print("Bot secrets are not set; skipping.")
@@ -1148,6 +1210,7 @@ def cmd_tick():
     decided = check_cards(cfg, settings, cards)
     settings["live"] = False
     save_settings(cfg, settings, sid)
+    IN_TICK = False
     print(f"tick: {handled} command(s), {decided} decision(s)")
 
 
