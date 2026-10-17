@@ -10,7 +10,7 @@ file called bot.env next to this one (one KEY=value per line). Never commit bot.
 While it runs, the 15-minute GitHub check stands back. When it stops, the GitHub check takes over again.
 Standard library only.
 """
-import base64, hashlib, json, os, queue, random, socket, ssl, struct, sys, threading, time
+import base64, hashlib, json, os, queue, random, re, socket, ssl, struct, sys, threading, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usp_bot as B
@@ -262,6 +262,7 @@ def load_env_file():
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
             k = k.strip().removeprefix("export ").strip()
+            k = re.sub(r"[\s-]+", "_", k).upper()  # "GITHUB TOKEN" or "github-token" still means GITHUB_TOKEN
             # bot.env wins: an empty or old value set elsewhere on the computer used to hide the token
             os.environ[k] = v.strip().strip('"\'')
             names.append(k + ("" if os.environ[k] else " (empty)"))

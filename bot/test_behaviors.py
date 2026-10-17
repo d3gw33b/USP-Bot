@@ -211,5 +211,15 @@ def approve_end_to_end():
     ok2 = any(b.get("state")=="failure" for _,b in STATUSES) and any("/pulls/121" in u and b=={"state":"closed"} for u,b in PATCHES)
     return ok and ok2
 check("39 owner approve sets usp/vote to success and merges; veto sets failure and closes", approve_end_to_end)
+def env_spelling_check():
+    d=tempfile.mkdtemp(); open(os.path.join(d, "bot.env"),"w").write("GITHUB TOKEN = spaced\n")
+    old_here, old_tok = L.HERE, os.environ.get("GITHUB_TOKEN")
+    L.HERE=d; os.environ["GITHUB_TOKEN"]=""
+    try:
+        L.load_env_file()
+        return os.environ["GITHUB_TOKEN"]=="spaced"
+    finally:
+        L.HERE=old_here; os.environ["GITHUB_TOKEN"]=old_tok or ""
+check("40 a key written as 'GITHUB TOKEN' still sets GITHUB_TOKEN", env_spelling_check)
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
