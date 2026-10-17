@@ -474,7 +474,7 @@ def analyse(files, commits):
             floor = t
     if any(f["filename"].startswith(".github/") for f in files):
         flags.append("🔴 Changes the repo's automation or safety checks (.github).")
-        bump("very_large")
+        bump("large")
     n = sum(1 for f in files if RISKY_BIN.search(f["filename"]))
     if n:
         flags.append(f"🔴 Adds or changes {n} file(s) of a type that could be game data, binaries or screenshots.")
@@ -791,6 +791,18 @@ VOTE_CONTEXT = "usp/vote"  # the commit status a ruleset can require before a pu
 GATE = {"open": ("pending", "Waiting for the vote"), "approved": ("success", "Vote passed"),
         "owner": ("success", "Owner's change, no vote needed"), "auto": ("success", "Accepted by an override"),
         "rejected": ("failure", "Vote did not pass"), "expired": ("failure", "Vote ended without approval")}
+
+
+def close_rejected(st):
+    """Closes the pull request when its vote ends REJECTED. Needs GITHUB_TOKEN with pull request write access."""
+    if not os.environ.get("GITHUB_TOKEN"):
+        return
+    try:
+        http("PATCH", f"https://api.github.com/repos/{st['repo']}/pulls/{st['pr']}", {"state": "closed"},
+             {"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json",
+              "User-Agent": "usp-bot"})
+    except Exception as e:
+        print(f"could not close the pull request: {type(e).__name__}")
 
 
 def post_vote_status(st, state):
@@ -1182,6 +1194,8 @@ def handle_command(cfg, settings, cards, msg, now):
         edit_card(cfg, m, st, f"➜ **{state.upper()}**: {reason} (<@{uid}>).")
         announce(cfg, m, st, state, reason)
         team_result(cfg, m, st, state, {}, {}, by=(w[0], uid))
+        if state == "rejected":
+            close_rejected(st)
         return f"Done: {short(st['repo'], st['pr'])} {state}."
     return "I didn't understand that. Try `!usp help`."
 
@@ -1307,6 +1321,8 @@ def check_card(cfg, settings, m, st, now):
         announce(cfg, m, st, state, reason)
         counted, ov, _, _, _ = tally(cfg, settings, st, reactions(cfg, cfg["ch"]["voting"], m["id"]))
         team_result(cfg, m, st, state, counted, ov)
+        if state == "rejected":
+            close_rejected(st)
         return True
     return False
 
