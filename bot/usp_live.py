@@ -208,6 +208,7 @@ class Live:
     def check_in(self):
         """Timer check, and moves the cursor so the GitHub check knows this bot is alive."""
         B.check_cards(self.cfg, self.settings, B.find_cards(self.cfg, self.me))
+        B.check_summary_requests(self.cfg)
         if self.online.is_set() and self.synced:
             self.settings["cursor"] = max(self.settings["cursor"], B.now_ms() - 10_000)
             self.settings["live"] = True

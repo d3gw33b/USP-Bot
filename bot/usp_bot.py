@@ -353,12 +353,13 @@ def download(url, dest, headers=None):
 
 def llama_server_path():
     d = os.path.join(llm_dir(), "llama")
-    found = glob.glob(os.path.join(d, "**", "llama-server"), recursive=True)
+    found = glob.glob(os.path.join(d, "**", LLAMA_EXE), recursive=True)
     if found:
         return found[0]
     os.makedirs(d, exist_ok=True)
     def plain_cpu(n):
-        return re.search(r"ubuntu.*x64.*\.(zip|tar\.gz)$", n) and not re.search(r"vulkan|cuda|rocm|sycl|hip|openvino|s390|arm", n)
+        system = r"win.*x64" if os.name == "nt" else r"ubuntu.*x64"
+        return re.search(system + r".*\.(zip|tar\.gz)$", n) and not re.search(r"vulkan|cuda|rocm|sycl|hip|openvino|s390|arm", n)
     asset, seen = None, []
     for rel in gh("/repos/ggml-org/llama.cpp/releases?per_page=20"):  # newest first; some releases carry no binaries
         seen += [a["name"] for a in rel["assets"]]
@@ -376,7 +377,7 @@ def llama_server_path():
         import tarfile
         with tarfile.open(z) as tf:
             tf.extractall(d, filter="data")
-    exe = glob.glob(os.path.join(d, "**", "llama-server"), recursive=True)[0]
+    exe = glob.glob(os.path.join(d, "**", LLAMA_EXE), recursive=True)[0]
     for f in glob.glob(os.path.join(os.path.dirname(exe), "*")):
         os.chmod(f, 0o755)
     return exe
@@ -386,11 +387,14 @@ LIVE = False  # set by usp_live.py: answering commands, so never download or set
 SUMMARY_SECONDS = 45  # a summary command gives up on the model after this, and uses the card's TL;DR
 
 
+LLAMA_EXE = "llama-server.exe" if os.name == "nt" else "llama-server"
+
+
 def model_ready(model):
     """True when the local model and its server are already on this computer."""
     d = llm_dir()
     return os.path.exists(os.path.join(d, model["file"])) and bool(
-        glob.glob(os.path.join(d, "llama", "**", "llama-server"), recursive=True))
+        glob.glob(os.path.join(d, "llama", "**", LLAMA_EXE), recursive=True))
 
 
 def with_deadline(seconds, fn, *args):
@@ -907,6 +911,72 @@ def plain_summary(settings, text):
     return out.strip()[:1200]
 
 
+SUMMARY_DIR_ENV = "USP_SUMMARY_DIR"  # where requests and replies go; default is a folder in the home directory
+REQUEST_WAIT = 30 * 60  # seconds a summary request waits for a reply before the bot says it's unavailable
+
+
+def summary_folder(name):
+    d = os.path.join(os.environ.get(SUMMARY_DIR_ENV) or os.path.expanduser(os.path.join("~", "usp-summary")), name)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def request_name(repo, num):
+    return f"{repo.lower().replace('/', '_')}_{num}"
+
+
+def reply_for(repo, num):
+    """A summary a Claude session wrote for this pull request, or None."""
+    path = os.path.join(summary_folder("replies"), request_name(repo, num) + ".txt")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return f.read().strip()[:2600] or None
+
+
+def ask_for_summary(st, channel_id):
+    """Leaves a request file for a Claude session to answer. The bot posts the reply when it arrives."""
+    repo, num = st["repo"], st["pr"]
+    pr = gh(f"/repos/{repo}/pulls/{num}")
+    files = gh_all(f"/repos/{repo}/pulls/{num}/files")
+    diff = gh(f"/repos/{repo}/pulls/{num}", raw=True, accept="application/vnd.github.v3.diff").decode("utf-8", "replace")
+    _, _, flags, _ = analyse(files, [])
+    doc = {"repo": repo, "pr": num, "channel": channel_id, "requested_at": now_ms() // 1000,
+           "prompt": build_prompt(pr["title"], pr.get("body"), files, flags, diff)}
+    path = os.path.join(summary_folder("requests"), request_name(repo, num) + ".json")
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(doc, f)
+    os.replace(path + ".tmp", path)
+
+
+def check_summary_requests(cfg):
+    """Posts a reply for each request a Claude session has answered, or says it's unavailable after a wait."""
+    req_dir, rep_dir = summary_folder("requests"), summary_folder("replies")
+    for name in os.listdir(req_dir):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(req_dir, name)
+        try:
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            continue
+        reply = os.path.join(rep_dir, name[:-5] + ".txt")
+        if os.path.exists(reply):
+            with open(reply, encoding="utf-8") as f:
+                text = f.read().strip()[:1500]
+            body = f"**Plain version of {short(doc['repo'], doc['pr'])}**\n{text}\n\n{DISCLAIMER}" if text else None
+        elif now_ms() // 1000 - doc["requested_at"] > REQUEST_WAIT:
+            body = None
+        else:
+            continue
+        dc("POST", f"/channels/{doc['channel']}/messages", {"content": body or "Summary unavailable right now. Nothing answered the request in time.",
+                                                              "allowed_mentions": {"parse": []}})
+        os.remove(path)
+        if os.path.exists(reply):
+            os.remove(reply)
+
+
 def make_summary(settings, st):
     """Writes a summary now, with the bot's own model. Needs GITHUB_TOKEN (bot.env) for private repos."""
     model = resolve_model(settings.get("model", "gemma"))
@@ -953,13 +1023,20 @@ def handle_command(cfg, settings, cards, msg, now):
         m, st = hit
         text = card_summary(m["embeds"][0])
         if not text:
+            text = reply_for(st["repo"], st["pr"])
+        if not text:
             try:
                 text = with_deadline(SUMMARY_SECONDS, make_summary, settings, st)
             except Exception as e:
                 print(f"summary failed: {type(e).__name__}")
                 text = None
         if not text:
-            return "Summary unavailable right now. The bot needs its model running on this computer, and a GitHub token for private repos."
+            try:
+                ask_for_summary(st, msg["channel_id"])
+            except Exception as e:
+                print(f"summary request failed: {type(e).__name__}")
+                return "Summary unavailable right now. The bot needs its model running on this computer, and a GitHub token for private repos."
+            return f"Asked for a summary of {short(st['repo'], st['pr'])}. It will appear here when it's ready."
         try:
             plain = with_deadline(SUMMARY_SECONDS, plain_summary, settings, text)
         except Exception as e:
