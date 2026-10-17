@@ -11,7 +11,7 @@ Environment:
   DISCORD_BOT_TOKEN    bot token (secret)
   DISCORD_OWNER_IDS    comma-separated Discord user ids of the owners (secret)
   DISCORD_CHANNEL_IDS  "mod=<id>,voting=<id>,settings=<id>" (secret)
-  GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_EVENT_PATH   set by Actions (card only)
+  GITHUB_TOKEN, GITHUB_REPOSITORY, GITHUB_EVENT_PATH   set by Actions (card only); on your PC, GITHUB_TOKEN lets `!usp summary` read private repos
   GEMINI_API_KEY       optional; only needed if a Gemini model is selected
   USP_LLM_DIR          where models and llama.cpp are kept (default ~/.cache/usp-llm)
 
@@ -651,6 +651,7 @@ HELP = """Type these in the bot settings channel, mod chat or the voting channel
 `!usp voters add @name` · `!usp voters remove @name`
 `!usp github-owners add <github name>`: that account's pull requests skip the vote (the repo owner's always do)
 `!usp tier small time 15m` · `!usp tier medium lines 500`: change a size's default timer or line limit (sizes: tiny, small, medium, large, very_large)
+`!usp summary usp#12`: a summary of an open vote, from its card or written now by the bot's own model
 `!usp model set gemma`: the AI that writes summaries: `gemma`, `gemma-small`, `qwen`, `llama`, `gemini` or `off` (or an exact name)
 `!usp ping here on` / `off`: @here in mod chat for new votes
 
@@ -766,6 +767,30 @@ def ref_card(cards, ref):
     return hits[0] if len(hits) == 1 else None
 
 
+def card_summary(embed):
+    """The AI summary already written on a vote card, or None."""
+    desc = embed.get("description", "")
+    if "**AI summary**\n" not in desc:
+        return None
+    text = desc.split("**AI summary**\n", 1)[1].split(DISCLAIMER, 1)[0].strip()
+    return text or None
+
+
+def make_summary(settings, st):
+    """Writes a summary now, with the bot's own model. Needs GITHUB_TOKEN (bot.env) for private repos."""
+    model = resolve_model(settings.get("model", "gemma"))
+    if not model or model["kind"] == "off":
+        return None
+    repo, num = st["repo"], st["pr"]
+    pr = gh(f"/repos/{repo}/pulls/{num}")
+    files = gh_all(f"/repos/{repo}/pulls/{num}/files")
+    diff = gh(f"/repos/{repo}/pulls/{num}", raw=True, accept="application/vnd.github.v3.diff").decode("utf-8", "replace")
+    _, _, flags, _ = analyse(files, [])
+    prompt = build_prompt(pr["title"], pr.get("body"), files, flags, diff)
+    out = run_gemini(model, prompt) if model["kind"] == "gemini" else run_local(model, prompt)
+    return out.strip()[:2600]
+
+
 def handle_command(cfg, settings, cards, msg, now):
     """Returns the reply text. Changes settings or cards in place."""
     owners = set(cfg["owners"])
@@ -787,6 +812,22 @@ def handle_command(cfg, settings, cards, msg, now):
         counted, ov, yes, no, voters = tally(cfg, settings, st, rx)
         return (f"{short(st['repo'], st['pr'])}: {st['tier'].replace('_', ' ')}, {MODE_TEXT[st['mode']]}. "
                 f"{len(counted)}/{len(voters)} voted ({yes} ✅, {no} ❌). Ends {ts(st['deadline'])}.")
+    if w[0] == "summary" and len(w) > 1:
+        hit = ref_card(cards, w[1])
+        if not hit:
+            return "No open vote matches that. Use `usp#N` or `tools#N`."
+        m, st = hit
+        text = card_summary(m["embeds"][0])
+        if text:
+            return f"**Summary of {short(st['repo'], st['pr'])}** (already on its card)\n{text[:1800]}\n\n{DISCLAIMER}"
+        try:
+            text = make_summary(settings, st)
+        except Exception as e:
+            print(f"summary failed: {type(e).__name__}")
+            text = None
+        if not text:
+            return "Summary unavailable right now. The bot needs its model running on this computer, and a GitHub token for private repos."
+        return f"**Summary of {short(st['repo'], st['pr'])}**\n{text[:1800]}\n\n{DISCLAIMER}"
     if w[0] == "voters":
         if len(w) == 1 or w[1] == "list":
             return "Voters: " + (", ".join(f"<@{v}>" for v in settings["voters"]) or "none yet") + ". Owners always count."
