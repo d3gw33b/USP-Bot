@@ -591,6 +591,7 @@ def cmd_card():
             dc("PATCH", f"/channels/{cfg['ch']['voting']}/messages/{m['id']}", {"embeds": [e]})
 
     if quiet:  # not a vote, so it stays out of the voting channel
+        post_vote_status(st, st["state"])
         print("No vote needed, so no card.")
         return
 
