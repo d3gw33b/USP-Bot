@@ -16,10 +16,11 @@ class FakeDC:
         if m: return {"id":m[1],"username":"user"+m[1][-4:],"global_name":None}
         m=re.match(r"/channels/(\d+)$",path)
         if m: return {"guild_id":"77"}
-        m=re.match(r"/channels/(\d+)/messages\?limit=(\d+)(?:&after=(\d+))?$",path)
+        m=re.match(r"/channels/(\d+)/messages\?limit=(\d+)(?:&after=(\d+))?(?:&before=(\d+))?$",path)
         if m and method=="GET":
             msgs=s.ch.get(m[1],[]); 
             if m[3]: msgs=[x for x in msgs if int(x["id"])>int(m[3])]
+            if m[4]: msgs=[x for x in msgs if int(x["id"])<int(m[4])]
             return list(reversed(msgs))[:int(m[2])]
         m=re.match(r"/channels/(\d+)/messages$",path)
         if m and method=="POST":
@@ -103,7 +104,7 @@ check("1 .github change is sized by its lines, not forced to large", lambda: B.a
 check("2 override owners vote sets overrides on", lambda: say("!usp override owners vote") and saved()["override_on"] is True)
 check("3 override off turns them off", lambda: (say("!usp override off"), saved()["override_on"])[1] is False)
 check("4 timer defaults: command 5s, summary off, help off", lambda: B.DEFAULT_SETTINGS["timers"]=={"command":5,"summary":0,"help":0})
-check("5 timer command is owner-only", lambda: "Only the two owners" in say("!usp timer command 9", who=MOD1))
+check("5 a mod's owner command asks the owners instead of running", lambda: "owner's ✅ here runs it" in say("!usp timer command 9", who=MOD1) and saved()["timers"]["command"]==5)
 check("6 timer command sets seconds", lambda: (say("!usp timer command 9"), saved()["timers"]["command"])[1]==9)
 check("7 timer off sets 0", lambda: (say("!usp timer command off"), saved()["timers"]["command"])[1]==0)
 check("8 timer restored to 5", lambda: (say("!usp timer command 5"), saved()["timers"]["command"])[1]==5)
@@ -221,5 +222,51 @@ def env_spelling_check():
     finally:
         L.HERE=old_here; os.environ["GITHUB_TOKEN"]=old_tok or ""
 check("40 a key written as 'GITHUB TOKEN' still sets GITHUB_TOKEN", env_spelling_check)
+def react_live(ch, mid, uid, emo):
+    D.react(mid, uid, emo); live.on_reaction({"channel_id":ch,"message_id":mid,"user_id":uid})
+def request_flow():
+    ask=D.user_msg("33",MOD1,"!usp ping here on"); live.on_message(ask); prompt=D.ch["33"][-1]
+    react_live("33", prompt["id"], RANDO, "✅")
+    untouched = saved()["ping_here"] is False and "-# request" in prompt["content"]
+    react_live("33", prompt["id"], OW2, "✅")
+    return untouched and saved()["ping_here"] is True and prompt["content"].startswith("✅ Approved by")
+check("41 an owner's ✅ runs a mod's request; anyone else's ✅ doesn't", request_flow)
+def cancel_flow():
+    say("!usp ping here off", who=MOD2); prompt=D.ch["33"][-1]
+    react_live("33", prompt["id"], OW1, "❌")
+    return saved()["ping_here"] is True and prompt["content"].startswith("❌ Cancelled")
+check("42 an owner's ❌ cancels a request", cancel_flow)
+check("43 whitelist add needs a real owner", lambda: "owner's ✅" in say("!usp whitelist add <@"+MOD2+">", who=MOD1) and saved()["whitelist"]==[])
+check("44 whitelisted members run owner commands at once and it's saved", lambda: (say("!usp whitelist add <@"+MOD1+">"), say("!usp ping here off", who=MOD1), saved())[2]["ping_here"] is False and saved()["whitelist"]==[MOD1])
+make_pr(130,[{"filename":"a","additions":800,"deletions":0,"status":"modified","patch":"x"}]); B.cmd_card()
+check("45 whitelisted members still can't approve", lambda: "Only the two owners" in say("!usp approve usp#130", who=MOD1, ch="22") and cards()[-1][1]["state"]=="open")
+def clear_mod():
+    REMOVALS.clear(); B.BOT_ID.clear()
+    for i in range(4): D.ch.setdefault("11",[]).append({"id":D.nid(),"author":{"id":D.me,"bot":True},"content":f"old {i}","embeds":[]})
+    say("!usp clear 3", ch="11")
+    ids=[i for _,x,secs in REMOVALS if secs==0 for i in x]
+    olds=[m["id"] for m in D.ch["11"] if m["content"].startswith("old ")]
+    return len(ids)==3 and set(ids) <= set(olds+[m["id"] for m in D.ch["11"]]) and olds[0] not in ids
+check("46 clear in mod chat deletes the bot's last messages at once", clear_mod)
+def clear_voting():
+    REMOVALS.clear()
+    prompt_text=say("!usp clear 100", who=MOD1, ch="22"); prompt=D.ch["22"][-1]
+    asked = "Are you sure" in prompt_text and not any(secs==0 for _,_,secs in REMOVALS)
+    react_live("22", prompt["id"], RANDO, "✅")
+    still = not any(secs==0 for _,_,secs in REMOVALS)
+    react_live("22", prompt["id"], MOD1, "✅")
+    ids=[i for _,x,secs in REMOVALS if secs==0 for i in x]
+    open_ids={m["id"] for m,st in cards() if st["state"]=="open"}
+    return asked and still and ids and not (set(ids) & open_ids) and prompt["id"] not in ids
+check("47 clear in voting asks first; a whitelisted ✅ runs it; open votes and the prompt stay", clear_voting)
+def clear_settings_keeps_cards():
+    REMOVALS.clear()
+    say("!usp clear 100"); prompt=D.ch["33"][-1]; react_live("33", prompt["id"], OW1, "✅")
+    ids={i for _,x,secs in REMOVALS if secs==0 for i in x}
+    keep={m["id"] for m in D.ch["33"] if m.get("embeds") and m["embeds"][0].get("title") in (B.SETTINGS_TITLE, B.HELP_TITLE)}
+    return bool(ids) and keep and not (ids & keep)
+check("48 clear never deletes the settings or help card", clear_settings_keeps_cards)
+check("49 decision cards no longer tell owners to finish on GitHub", lambda: "on GitHub or ask for changes" not in open(B.__file__).read() and "can now merge it on GitHub" not in open(B.__file__).read())
+check("50 !usp commands shows the help", lambda: "help_link" in B.handle_command.__code__.co_names or "pinned" in say("!usp commands", ch="11") or "commands" in say("!usp commands", ch="11"))
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
