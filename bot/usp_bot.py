@@ -610,6 +610,7 @@ def cmd_card():
     if model_note:
         embed["fields"] = [{"name": "Model", "value": model_note[:200], "inline": True}]
     card = dc("POST", f"/channels/{cfg['ch']['voting']}/messages", {"embeds": [embed], "allowed_mentions": {"parse": []}})
+    post_vote_status(st, st["state"])
     for emo in (YES, MEH, NO):
         dc("PUT", f"/channels/{cfg['ch']['voting']}/messages/{card['id']}/reactions/{urllib.parse.quote(emo)}/@me")
     guild = dc("GET", f"/channels/{cfg['ch']['voting']}").get("guild_id")
@@ -728,6 +729,27 @@ def decide(cfg, settings, st, rx, now):
     return ("rejected", f"more ❌ than ✅ ({no} to {yes})") if no > yes else ("approved", f"no objection ({yes} ✅, {no} ❌)")
 
 
+VOTE_CONTEXT = "usp/vote"  # the commit status a ruleset can require before a pull request merges
+GATE = {"open": ("pending", "Waiting for the vote"), "approved": ("success", "Vote passed"),
+        "owner": ("success", "Owner's change, no vote needed"), "auto": ("success", "Accepted by an override"),
+        "rejected": ("failure", "Vote did not pass"), "expired": ("failure", "Vote ended without approval")}
+
+
+def post_vote_status(st, state):
+    """Puts the vote's result on the pull request's head commit. Needs GITHUB_TOKEN with commit status write access."""
+    gate = GATE.get(state)
+    if not gate or not os.environ.get("GITHUB_TOKEN"):
+        return
+    try:
+        sha = gh(f"/repos/{st['repo']}/pulls/{st['pr']}")["head"]["sha"]
+        http("POST", f"https://api.github.com/repos/{st['repo']}/statuses/{sha}",
+             {"state": gate[0], "context": VOTE_CONTEXT, "description": gate[1]},
+             {"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json",
+              "User-Agent": "usp-bot"})
+    except Exception as e:
+        print(f"vote status not posted: {type(e).__name__}")
+
+
 def edit_card(cfg, m, st, extra=None):
     e = m["embeds"][0]
     stamp_card(e, st)
@@ -735,6 +757,7 @@ def edit_card(cfg, m, st, extra=None):
         e["description"] = (e.get("description", "") + "\n\n" + extra)[:4096]
     dc("PATCH", f"/channels/{cfg['ch']['voting']}/messages/{m['id']}", {"embeds": [e]})
     m["embeds"][0] = e
+    post_vote_status(st, st["state"])
 
 
 def announce(cfg, m, st, state, reason):
