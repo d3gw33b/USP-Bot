@@ -847,32 +847,38 @@ def user_name(uid):
 OWNER_LINE = {1: "{name} in agreement", -1: "{name} has VETOED!", 0: "{name} has no opinion"}
 
 
-def team_result(cfg, m, st, state, counted, owner_votes, by=None):
-    """Posts the vote's outcome: the team's count for a vote, and each owner's word on their own line."""
-    word = {"approved": "APPROVED", "rejected": "REJECTED", "expired": "ENDED WITHOUT APPROVAL"}[state]
+def owner_lines(st, owner_votes, by=None):
+    """Each owner's word on the vote, one line each, to sit inside the decision card."""
     tag = short(st["repo"], st["pr"])
     lines = []
-    if st["mode"] in ("lazy", "democratic") and not by:
-        yes = sum(1 for v in counted.values() if v == 1)
-        no = sum(1 for v in counted.values() if v == -1)
-        neutral = sum(1 for v in counted.values() if v == 0)
-        lines.append(f"**THE TEAM HAS SPOKEN:** {yes} ✅ · {neutral} 🤷 · {no} ❌ on {tag}. Result: **{word}**.")
     if by:  # an owner's command decided it
         lines.append(OWNER_LINE.get({"approve": 1, "deny": -1, "veto": -1}[by[0]], "{name}").format(name=user_name(by[1])) + f" on {tag}.")
     for uid, v in owner_votes.items():
         lines.append(OWNER_LINE[v].format(name=user_name(uid)) + f" on {tag}.")
-    if lines:
-        dc("POST", f"/channels/{cfg['ch']['voting']}/messages", {
-            "content": "\n".join(lines)[:1900],
-            "message_reference": {"message_id": m["id"], "fail_if_not_exists": False}, "allowed_mentions": {"parse": []}})
+    return lines
 
 
-def announce(cfg, m, st, state, reason):
+def team_result(cfg, m, st, state, counted, by=None):
+    """Posts the team's count for a majority or easy vote. Owners' words go in the decision card instead."""
+    if st["mode"] not in ("lazy", "democratic") or by:
+        return
+    word = {"approved": "APPROVED", "rejected": "REJECTED", "expired": "ENDED WITHOUT APPROVAL"}[state]
+    tag = short(st["repo"], st["pr"])
+    yes = sum(1 for v in counted.values() if v == 1)
+    no = sum(1 for v in counted.values() if v == -1)
+    neutral = sum(1 for v in counted.values() if v == 0)
+    dc("POST", f"/channels/{cfg['ch']['voting']}/messages", {
+        "content": f"**THE TEAM HAS SPOKEN:** {yes} ✅ · {neutral} 🤷 · {no} ❌ on {tag}. Result: **{word}**.",
+        "message_reference": {"message_id": m["id"], "fail_if_not_exists": False}, "allowed_mentions": {"parse": []}})
+
+
+def announce(cfg, m, st, state, reason, extra=()):
     word = {"approved": "✅ APPROVED", "rejected": "❌ REJECTED", "expired": "⌛ EXPIRED"}[state]
     tag = short(st["repo"], st["pr"])
     dc("POST", f"/channels/{cfg['ch']['voting']}/messages", {
         "embeds": [{"title": f"Decision for {tag}: {word}", "description": f"Reason: {reason}.\n"
-                    + ("An owner can now merge it on GitHub." if state == "approved" else "An owner should close it on GitHub or ask for changes."),
+                    + ("An owner can now merge it on GitHub." if state == "approved" else "An owner should close it on GitHub or ask for changes.")
+                    + "".join(f"\n{line}" for line in extra),
                     "color": COLOR.get(state, 0x95A5A6)}],
         "message_reference": {"message_id": m["id"], "fail_if_not_exists": False}, "allowed_mentions": {"parse": []}})
 
@@ -1192,8 +1198,8 @@ def handle_command(cfg, settings, cards, msg, now):
         reason = {"approve": "approved by an owner", "deny": "denied by an owner", "veto": "vetoed by an owner"}[w[0]]
         st["state"] = state
         edit_card(cfg, m, st, f"➜ **{state.upper()}**: {reason} (<@{uid}>).")
-        announce(cfg, m, st, state, reason)
-        team_result(cfg, m, st, state, {}, {}, by=(w[0], uid))
+        announce(cfg, m, st, state, reason, owner_lines(st, {}, by=(w[0], uid)))
+        team_result(cfg, m, st, state, {}, by=(w[0], uid))
         if state == "rejected":
             close_rejected(st)
         return f"Done: {short(st['repo'], st['pr'])} {state}."
@@ -1318,9 +1324,9 @@ def check_card(cfg, settings, m, st, now):
     elif state:
         st["state"] = state
         edit_card(cfg, m, st, f"➜ **{state.upper()}**: {reason}.")
-        announce(cfg, m, st, state, reason)
         counted, ov, _, _, _ = tally(cfg, settings, st, reactions(cfg, cfg["ch"]["voting"], m["id"]))
-        team_result(cfg, m, st, state, counted, ov)
+        announce(cfg, m, st, state, reason, owner_lines(st, ov))
+        team_result(cfg, m, st, state, counted)
         if state == "rejected":
             close_rejected(st)
         return True
