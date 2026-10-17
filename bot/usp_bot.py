@@ -576,7 +576,7 @@ def cmd_card():
         st = {"repo": repo, "pr": num, "tier": tier, "mode": mode, "deadline": now + round(hours * 60) * 60, "state": "open"}
         if mode == "auto":
             st.update(state="auto", deadline=now)
-    quiet = st["state"] != "open"  # no vote: no reactions, no notices
+    quiet = st["state"] != "open"  # no vote: nothing is posted, so no reactions or notices
 
     # retire older cards for the same pull request
     for m in dc("GET", f"/channels/{cfg['ch']['voting']}/messages?limit=100"):
@@ -590,18 +590,17 @@ def cmd_card():
             e["title"] = "[superseded by new commits] " + e.get("title", "")[:220]
             dc("PATCH", f"/channels/{cfg['ch']['voting']}/messages/{m['id']}", {"embeds": [e]})
 
+    if quiet:  # not a vote, so it stays out of the voting channel
+        print("No vote needed, so no card.")
+        return
+
     risk = "\n".join(flags) if flags else "🟢 Nothing flagged by the automatic checks."
     desc = f"**Automatic check**\n{risk}\n\n"
     if summary:
         desc += f"**AI summary**\n{summary}\n\n{DISCLAIMER}\n\n"
     desc += f"**Size:** {len(files)} file(s), +{add} −{dele} → **{tier.replace('_', ' ')}**\n"
-    if st["state"] == "owner":
-        desc += "**No vote needed:** an owner made this change. This card is just so everyone can see it."
-    elif st["state"] == "auto":
-        desc += "**Accepted automatically** because an owner turned on an override for this size. No vote needed."
-    else:
-        desc += (f"**How it's decided:** {PLAIN[mode]}\n**Voting closes** {ts(st['deadline'])}, or sooner once everyone has voted.\n"
-                 f"**React once:** {YES} yes · {MEH} no opinion · {NO} no")
+    desc += (f"**How it's decided:** {PLAIN[mode]}\n**Voting closes** {ts(st['deadline'])}, or sooner once everyone has voted.\n"
+             f"**React once:** {YES} yes · {MEH} no opinion · {NO} no")
     embed = {
         "author": {"name": pr["user"]["login"], "icon_url": pr["user"]["avatar_url"], "url": pr["user"]["html_url"]},
         "title": f"[{repo}] Pull request #{num}: {pr['title']}"[:256],
@@ -611,13 +610,10 @@ def cmd_card():
     if model_note:
         embed["fields"] = [{"name": "Model", "value": model_note[:200], "inline": True}]
     card = dc("POST", f"/channels/{cfg['ch']['voting']}/messages", {"embeds": [embed], "allowed_mentions": {"parse": []}})
-    for emo in (() if quiet else (YES, MEH, NO)):
+    for emo in (YES, MEH, NO):
         dc("PUT", f"/channels/{cfg['ch']['voting']}/messages/{card['id']}/reactions/{urllib.parse.quote(emo)}/@me")
     guild = dc("GET", f"/channels/{cfg['ch']['voting']}").get("guild_id")
     link = f"https://discord.com/channels/{guild}/{cfg['ch']['voting']}/{card['id']}"
-    if quiet:
-        print("Card posted (no vote needed).")
-        return
     if mode in ("owner1", "owner2"):  # only the owners decide, so mod chat isn't told
         ping_owners(cfg, f"Owner approval needed for **{short(repo, num)}**.", card["id"])
     else:
