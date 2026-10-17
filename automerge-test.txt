@@ -1,0 +1,1 @@
+Throwaway file to test owner auto-merge. This PR should merge on its own if auto-merge is on.
