@@ -1450,7 +1450,10 @@ def run_command(cfg, settings, cards, msg):
     words = msg["content"].lower().split()[1:]
     kind = {"commands": "help"}.get(words[0], words[0]) if words and words[0] in ("help", "commands", "summary") else "command"
     secs = settings["timers"].get(kind, 0)
-    temp = secs > 0 and msg["channel_id"] != cfg["ch"]["mod"] and not isinstance(reply, Ask)  # mod chat keeps its replies
+    clearing = words[:1] == ["clear"]  # a clear's result always clears itself, even in mod chat
+    if clearing:
+        secs = secs or 5
+    temp = (secs > 0 and msg["channel_id"] != cfg["ch"]["mod"] or clearing) and not isinstance(reply, Ask)  # mod chat keeps its replies
     if temp:
         reply = temp_prefix(cfg) + reply
     if isinstance(reply, Ask):  # stays up until someone allowed answers it with a reaction
@@ -1501,9 +1504,13 @@ def answer_request(cfg, settings, cards, m):
         except Exception as e:
             print(f"command failed: {type(e).__name__}")
             out = "Something went wrong running that command."
-        edit(f"✅ {'Approved' if kind == 'request' else 'Confirmed'} by <@{yes}>. {out}")
+        prefix = temp_prefix(cfg) if cmd.lower().split()[1:2] == ["clear"] else ""  # a clear's result clears itself
+        edit(f"{prefix}✅ {'Approved' if kind == 'request' else 'Confirmed'} by <@{yes}>. {out}")
     secs = settings["timers"].get("command", 0)
-    if secs and ch != cfg["ch"]["mod"]:
+    clearing = cmd.lower().split()[1:2] == ["clear"]
+    if clearing:
+        secs = secs or 5
+    if secs and (ch != cfg["ch"]["mod"] or clearing):
         remove_later(ch, [m["id"], cmd_id], secs)
     return True
 

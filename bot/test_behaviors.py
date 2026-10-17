@@ -316,5 +316,11 @@ def sweep_test():
         B.gh_all, B.gh = saved_gh_all, saved_gh
     return n==1 and any("pulls/151/merge" in x for x in MERGES)
 check("57 the sweep merges an owner's green pull request that was left waiting", sweep_test)
+def clear_result_clears():
+    REMOVALS.clear()
+    say("!usp clear 1", who=OW1, ch="11")
+    reply_id=D.ch["11"][-1]["id"]
+    return any(secs>0 and reply_id in ids for _,ids,secs in REMOVALS)
+check("51 a clear result clears itself, even in mod chat", clear_result_clears)
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
