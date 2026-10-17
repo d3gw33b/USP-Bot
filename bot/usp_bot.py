@@ -660,7 +660,7 @@ def cmd_card():
         print("No vote needed, so no card.")
         if st["state"] == "owner" and automerge_for(settings, author):  # the owner switched merging on for their own
             merge_approved(st, tries=1)
-            dc("POST", f"/channels/{cfg['ch']['voting']}/messages",  # the live bot merges it the moment this lands
+            dc("POST", f"/channels/{cfg['ch']['mod']}/messages",  # mod chat, not voting: the live bot merges it, then deletes this note
                {"content": f"{AUTOMERGE_TAG}{repo}#{num}", "allowed_mentions": {"parse": []}})
         return
 

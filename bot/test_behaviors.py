@@ -323,7 +323,7 @@ def clear_result_clears():
     return any(secs>0 and reply_id in ids for _,ids,secs in REMOVALS)
 check("51 a clear result clears itself, even in mod chat", clear_result_clears)
 def tag_posted():
-    return any(m["content"].startswith(B.AUTOMERGE_TAG) for m in D.ch.get("22",[]))
+    return any(m["content"].startswith(B.AUTOMERGE_TAG) for m in D.ch.get("11",[]))
 check("58 an owner's no-vote merge tells the live bot to merge it at once", lambda: say("!usp automerge on d3gw33b", who=OW1) and (make_pr(160,[{"filename":"a","additions":3,"deletions":0,"status":"modified","patch":"x"}], who="d3gw33b"), B.cmd_card(), tag_posted())[2])
 def waiting_merges():
     MERGES.clear(); seen=[0]
