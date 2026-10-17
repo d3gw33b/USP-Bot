@@ -192,6 +192,13 @@ class Live:
         if d.get("channel_id") not in self.chans or d["id"] in self.seen:
             return
         self.seen.add(d["id"])
+        if d.get("content", "").startswith(B.AUTOMERGE_TAG) and d.get("author", {}).get("id") == self.me:
+            self.guarded(B.merge_waiting, self.settings, d["content"][len(B.AUTOMERGE_TAG):])  # the card job's word that a pull request is ready
+            try:
+                B.dc("DELETE", f"/channels/{d['channel_id']}/messages/{d['id']}")  # a note, not a vote or a message to keep
+            except Exception as e:
+                print(f"could not remove a note: {type(e).__name__}")
+            return
         before = json.dumps(self.settings, sort_keys=True)
         if B.run_command(self.cfg, self.settings, B.find_cards(self.cfg, self.me), d):
             print("Answered a command.")
