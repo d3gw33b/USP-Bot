@@ -256,12 +256,16 @@ def load_env_file():
     path = os.path.join(HERE, "bot.env")
     if not os.path.exists(path):
         return
+    names = []
     for line in open(path, encoding="utf-8-sig"):
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
+            k = k.strip().removeprefix("export ").strip()
             # bot.env wins: an empty or old value set elsewhere on the computer used to hide the token
-            os.environ[k.strip().removeprefix("export ").strip()] = v.strip().strip('"\'')
+            os.environ[k] = v.strip().strip('"\'')
+            names.append(k + ("" if os.environ[k] else " (empty)"))
+    print("Read from bot.env: " + (", ".join(names) or "nothing"))  # names only, never values
 
 
 def hold_lock(stop):
