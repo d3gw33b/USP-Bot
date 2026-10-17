@@ -136,10 +136,21 @@ def gh_all(path):
 # -------------------------------------------------------------------------------------- config
 
 def env_config():
-    owners = [x.strip() for x in os.environ.get("DISCORD_OWNER_IDS", "").split(",") if x.strip()]
-    ch = dict(kv.split("=", 1) for kv in os.environ.get("DISCORD_CHANNEL_IDS", "").replace(" ", "").split(",") if "=" in kv)
-    missing = [k for k in ("mod", "voting", "settings") if k not in ch]
-    if not os.environ.get("DISCORD_BOT_TOKEN") or not owners or missing:
+    """The bot's Discord settings from the environment. Tolerates spaces, new lines, quotes and capitals."""
+    def parts(name):
+        raw = re.sub(r"\s*[:=]\s*", "=", os.environ.get(name, "").strip().strip('"\''))
+        return [x.strip('"\'') for x in re.split(r"[,;\s]+", raw) if x.strip('"\'')]
+    owners = parts("DISCORD_OWNER_IDS")
+    ch = {}
+    for kv in parts("DISCORD_CHANNEL_IDS"):
+        k, sep, v = kv.partition("=")
+        if sep:
+            ch[k.lower()] = v
+    missing = [] if os.environ.get("DISCORD_BOT_TOKEN", "").strip() else ["DISCORD_BOT_TOKEN"]
+    missing += [] if owners else ["DISCORD_OWNER_IDS"]
+    missing += [f"DISCORD_CHANNEL_IDS {k}=" for k in ("mod", "voting", "settings") if k not in ch]
+    if missing:
+        print("Bot secrets missing or unreadable: " + ", ".join(missing), file=sys.stderr)
         return None
     return {"owners": owners, "ch": ch}
 
@@ -342,12 +353,13 @@ def download(url, dest, headers=None):
 
 def llama_server_path():
     d = os.path.join(llm_dir(), "llama")
-    found = glob.glob(os.path.join(d, "**", "llama-server"), recursive=True)
+    found = glob.glob(os.path.join(d, "**", LLAMA_EXE), recursive=True)
     if found:
         return found[0]
     os.makedirs(d, exist_ok=True)
     def plain_cpu(n):
-        return re.search(r"ubuntu.*x64.*\.(zip|tar\.gz)$", n) and not re.search(r"vulkan|cuda|rocm|sycl|hip|openvino|s390|arm", n)
+        system = r"win.*x64" if os.name == "nt" else r"ubuntu.*x64"
+        return re.search(system + r".*\.(zip|tar\.gz)$", n) and not re.search(r"vulkan|cuda|rocm|sycl|hip|openvino|s390|arm", n)
     asset, seen = None, []
     for rel in gh("/repos/ggml-org/llama.cpp/releases?per_page=20"):  # newest first; some releases carry no binaries
         seen += [a["name"] for a in rel["assets"]]
@@ -365,13 +377,49 @@ def llama_server_path():
         import tarfile
         with tarfile.open(z) as tf:
             tf.extractall(d, filter="data")
-    exe = glob.glob(os.path.join(d, "**", "llama-server"), recursive=True)[0]
+    exe = glob.glob(os.path.join(d, "**", LLAMA_EXE), recursive=True)[0]
     for f in glob.glob(os.path.join(os.path.dirname(exe), "*")):
         os.chmod(f, 0o755)
     return exe
 
 
+LIVE = False  # set by usp_live.py: answering commands, so never download or set up a model then
+SUMMARY_SECONDS = 45  # a summary command gives up on the model after this, and uses the card's TL;DR
+
+
+LLAMA_EXE = "llama-server.exe" if os.name == "nt" else "llama-server"
+
+
+def model_ready(model):
+    """True when the local model and its server are already on this computer."""
+    d = llm_dir()
+    return os.path.exists(os.path.join(d, model["file"])) and bool(
+        glob.glob(os.path.join(d, "llama", "**", LLAMA_EXE), recursive=True))
+
+
+def with_deadline(seconds, fn, *args):
+    """Runs fn in the background and waits at most this long, so a slow model can't freeze the bot."""
+    out = {}
+
+    def run():
+        try:
+            out["value"] = fn(*args)
+        except Exception as e:
+            out["error"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        raise TimeoutError(f"no answer in {seconds}s")
+    if "error" in out:
+        raise out["error"]
+    return out.get("value")
+
+
 def run_local(model, prompt):
+    if LIVE and not model_ready(model):
+        raise RuntimeError("the model isn't set up on this computer")
     path = os.path.join(llm_dir(), model["file"])
     download(f"https://huggingface.co/{model['repo']}/resolve/main/{model['file']}", path)
     exe = llama_server_path()
@@ -863,6 +911,72 @@ def plain_summary(settings, text):
     return out.strip()[:1200]
 
 
+SUMMARY_DIR_ENV = "USP_SUMMARY_DIR"  # where requests and replies go; default is a folder in the home directory
+REQUEST_WAIT = 30 * 60  # seconds a summary request waits for a reply before the bot says it's unavailable
+
+
+def summary_folder(name):
+    d = os.path.join(os.environ.get(SUMMARY_DIR_ENV) or os.path.expanduser(os.path.join("~", "usp-summary")), name)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def request_name(repo, num):
+    return f"{repo.lower().replace('/', '_')}_{num}"
+
+
+def reply_for(repo, num):
+    """A summary a Claude session wrote for this pull request, or None."""
+    path = os.path.join(summary_folder("replies"), request_name(repo, num) + ".txt")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return f.read().strip()[:2600] or None
+
+
+def ask_for_summary(st, channel_id):
+    """Leaves a request file for a Claude session to answer. The bot posts the reply when it arrives."""
+    repo, num = st["repo"], st["pr"]
+    pr = gh(f"/repos/{repo}/pulls/{num}")
+    files = gh_all(f"/repos/{repo}/pulls/{num}/files")
+    diff = gh(f"/repos/{repo}/pulls/{num}", raw=True, accept="application/vnd.github.v3.diff").decode("utf-8", "replace")
+    _, _, flags, _ = analyse(files, [])
+    doc = {"repo": repo, "pr": num, "channel": channel_id, "requested_at": now_ms() // 1000,
+           "prompt": build_prompt(pr["title"], pr.get("body"), files, flags, diff)}
+    path = os.path.join(summary_folder("requests"), request_name(repo, num) + ".json")
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(doc, f)
+    os.replace(path + ".tmp", path)
+
+
+def check_summary_requests(cfg):
+    """Posts a reply for each request a Claude session has answered, or says it's unavailable after a wait."""
+    req_dir, rep_dir = summary_folder("requests"), summary_folder("replies")
+    for name in os.listdir(req_dir):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(req_dir, name)
+        try:
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            continue
+        reply = os.path.join(rep_dir, name[:-5] + ".txt")
+        if os.path.exists(reply):
+            with open(reply, encoding="utf-8") as f:
+                text = f.read().strip()[:1500]
+            body = f"**Plain version of {short(doc['repo'], doc['pr'])}**\n{text}\n\n{DISCLAIMER}" if text else None
+        elif now_ms() // 1000 - doc["requested_at"] > REQUEST_WAIT:
+            body = None
+        else:
+            continue
+        dc("POST", f"/channels/{doc['channel']}/messages", {"content": body or "Summary unavailable right now. Nothing answered the request in time.",
+                                                              "allowed_mentions": {"parse": []}})
+        os.remove(path)
+        if os.path.exists(reply):
+            os.remove(reply)
+
+
 def make_summary(settings, st):
     """Writes a summary now, with the bot's own model. Needs GITHUB_TOKEN (bot.env) for private repos."""
     model = resolve_model(settings.get("model", "gemma"))
@@ -899,22 +1013,32 @@ def handle_command(cfg, settings, cards, msg, now):
         counted, ov, yes, no, voters = tally(cfg, settings, st, rx)
         return (f"{short(st['repo'], st['pr'])}: {st['tier'].replace('_', ' ')}, {MODE_TEXT[st['mode']]}. "
                 f"{len(counted)}/{len(voters)} voted ({yes} ✅, {no} ❌). Ends {ts(st['deadline'])}.")
-    if w[0] == "summary" and len(w) > 1:
-        hit = ref_card(cards, w[1])
+    if w[0] == "summary":
+        open_cards = [(c, st) for c, st in cards if st["state"] == "open"]
+        hit = ref_card(cards, w[1]) if len(w) > 1 else (open_cards[0] if len(open_cards) == 1 else None)
         if not hit:
+            if len(w) == 1 and open_cards:
+                return "Several votes are open. Name one, like `!usp summary usp#3`."
             return "No open vote matches that. Use `usp#N` or `tools#N`."
         m, st = hit
         text = card_summary(m["embeds"][0])
         if not text:
+            text = reply_for(st["repo"], st["pr"])
+        if not text:
             try:
-                text = make_summary(settings, st)
+                text = with_deadline(SUMMARY_SECONDS, make_summary, settings, st)
             except Exception as e:
                 print(f"summary failed: {type(e).__name__}")
                 text = None
         if not text:
-            return "Summary unavailable right now. The bot needs its model running on this computer, and a GitHub token for private repos."
+            try:
+                ask_for_summary(st, msg["channel_id"])
+            except Exception as e:
+                print(f"summary request failed: {type(e).__name__}")
+                return "Summary unavailable right now. The bot needs its model running on this computer, and a GitHub token for private repos."
+            return f"Asked for a summary of {short(st['repo'], st['pr'])}. It will appear here when it's ready."
         try:
-            plain = plain_summary(settings, text)
+            plain = with_deadline(SUMMARY_SECONDS, plain_summary, settings, text)
         except Exception as e:
             print(f"plain summary failed: {type(e).__name__}")
             plain = None

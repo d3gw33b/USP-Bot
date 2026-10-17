@@ -21,6 +21,7 @@ FATAL = {4004: "the bot token is wrong (reset it and update bot.env)",
          4013: "the gateway intents are invalid",
          4014: "Message Content Intent is off (turn it on in the developer portal, Bot page)"}
 CHECK_EVERY = 60  # seconds between timer checks; also how often it tells the GitHub check it's alive
+STUCK_AFTER = 90  # longest the bot waits on one command or check before moving on
 
 
 class Closed(Exception):
@@ -207,6 +208,7 @@ class Live:
     def check_in(self):
         """Timer check, and moves the cursor so the GitHub check knows this bot is alive."""
         B.check_cards(self.cfg, self.settings, B.find_cards(self.cfg, self.me))
+        B.check_summary_requests(self.cfg)
         if self.online.is_set() and self.synced:
             self.settings["cursor"] = max(self.settings["cursor"], B.now_ms() - 10_000)
             self.settings["live"] = True
@@ -221,19 +223,29 @@ class Live:
                 name, d = events.get(timeout=5)
             except queue.Empty:
                 name, d = None, None
+            if name == "READY":
+                self.synced = False
+                self.guarded(self.catch_up)
+            elif name == "MESSAGE_CREATE" and self.synced:
+                self.guarded(self.on_message, d)
+            elif name in ("MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE") and self.synced:
+                self.guarded(self.on_reaction, d)
+            if time.time() - last >= CHECK_EVERY:
+                last = time.time()
+                self.guarded(self.check_in)
+
+    def guarded(self, fn, *args):
+        """Runs one job, but stops waiting after STUCK_AFTER seconds so one slow job can't freeze the bot."""
+        def run():
             try:
-                if name == "READY":
-                    self.synced = False
-                    self.catch_up()
-                elif name == "MESSAGE_CREATE" and self.synced:
-                    self.on_message(d)
-                elif name in ("MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE") and self.synced:
-                    self.on_reaction(d)
-                if time.time() - last >= CHECK_EVERY:
-                    last = time.time()
-                    self.check_in()
+                fn(*args)
             except Exception as e:
                 print(f"Something failed ({type(e).__name__}: {e}); carrying on.")
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(STUCK_AFTER)
+        if t.is_alive():
+            print(f"A job took over {STUCK_AFTER}s; carrying on without it.")
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -318,7 +330,13 @@ def reload_if_updated(live, lock, since):
     except Exception:
         pass
     lock.close()  # free the port so the new copy can take it
-    os.execv(sys.executable, [sys.executable] + sys.argv)
+    args = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+    if os.name == "nt":  # Windows execv drops the quotes around paths with spaces, so start a fresh copy instead
+        import subprocess
+        subprocess.Popen(args, cwd=HERE, close_fds=True,
+                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        os._exit(0)
+    os.execv(sys.executable, args)
 
 
 def main():
@@ -345,6 +363,7 @@ def main():
     if "--for" in sys.argv:  # run for a while, then stop cleanly (used by the bot-live-check workflow)
         threading.Timer(float(sys.argv[sys.argv.index("--for") + 1]), stop.set).start()
     since = {n: os.path.getmtime(os.path.join(HERE, n)) for n in WATCHED}
+    B.LIVE = True
     live = Live(cfg)
     events = queue.Queue()
     threading.Thread(target=live.work, args=(events,), daemon=True).start()
