@@ -260,7 +260,8 @@ def load_env_file():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip().strip('"'))
+            # bot.env wins: an empty or old value set elsewhere on the computer used to hide the token
+            os.environ[k.strip().removeprefix("export ").strip()] = v.strip().strip('"\'')
 
 
 def hold_lock(stop):
