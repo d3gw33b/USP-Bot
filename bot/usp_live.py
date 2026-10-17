@@ -289,6 +289,38 @@ def connect_loop(live, events, stop):
         stop.wait(wait)
 
 
+WATCHED = ("usp_bot.py", "usp_live.py")
+
+
+def changed_files(since):
+    """The bot's own files whose modification time moved, so a new version can load without a restart."""
+    return [n for n in WATCHED if os.path.getmtime(os.path.join(HERE, n)) != since[n]]
+
+
+def reload_if_updated(live, lock, since):
+    """Restarts this process on the new code, once the new files compile. Returns only if nothing changed."""
+    if not changed_files(since):
+        return
+    for n in WATCHED:
+        try:
+            compile(open(os.path.join(HERE, n), encoding="utf-8").read(), n, "exec")
+        except (OSError, SyntaxError) as e:
+            print(f"{n} changed but doesn't load yet ({type(e).__name__}); keeping the current code.")
+            for k in WATCHED:
+                since[k] = os.path.getmtime(os.path.join(HERE, k))
+            return
+    print("New bot code found; reloading.")
+    live.settings["live"] = False
+    if live.synced:
+        live.settings["cursor"] = max(live.settings["cursor"], B.now_ms() - 2000)
+    try:
+        live.save()
+    except Exception:
+        pass
+    lock.close()  # free the port so the new copy can take it
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
 def main():
     if sys.stdout is None:  # started hidden (pythonw): write a log next to this file instead
         sys.stdout = sys.stderr = open(os.path.join(HERE, "bot.log"), "a", encoding="utf-8", buffering=1)
@@ -312,13 +344,14 @@ def main():
     print(time.strftime("%Y-%m-%d %H:%M ") + "Starting the bot.")
     if "--for" in sys.argv:  # run for a while, then stop cleanly (used by the bot-live-check workflow)
         threading.Timer(float(sys.argv[sys.argv.index("--for") + 1]), stop.set).start()
+    since = {n: os.path.getmtime(os.path.join(HERE, n)) for n in WATCHED}
     live = Live(cfg)
     events = queue.Queue()
     threading.Thread(target=live.work, args=(events,), daemon=True).start()
     threading.Thread(target=connect_loop, args=(live, events, stop), daemon=True).start()
     try:
         while not stop.wait(1):
-            pass
+            reload_if_updated(live, lock, since)
     except KeyboardInterrupt:
         pass
     live.settings["live"] = False  # hand back to the GitHub check straight away
