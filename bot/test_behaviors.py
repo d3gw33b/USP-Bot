@@ -164,5 +164,15 @@ check("30 a deny does not merge", lambda: not any("pulls/92/merge" in x for x in
 make_pr(98,[{"filename":"a","additions":5000,"deletions":0,"status":"modified","patch":"x"}]); B.cmd_card()
 check("31 a huge vote waits for the second owner", lambda: "needs both owners" in say("!usp approve usp#98", who=OW1) and cards()[-1][1]["state"]=="open")
 check("32 a huge vote passes when both owners approve", lambda: (say("!usp approve usp#98", who=OW2), cards()[-1][1]["state"]=="approved" and any("pulls/98/merge" in x for x in MERGES))[1])
+import threading as _th
+_real_live=L.Live; _tries=[0]
+def _flaky(cfg):
+    _tries[0]+=1
+    if _tries[0]<3: raise OSError("connection reset")
+    return "live"
+L.Live=_flaky
+check("33 startup retries while Discord can't be reached", lambda: L.start_live(cfg, _th.Event(), pause=0)=="live" and _tries[0]==3)
+L.Live=_real_live
+check("34 offline past the limit asks for a restart", lambda: L.should_restart(0, L.WATCHDOG_AFTER+1) and not L.should_restart(0, L.WATCHDOG_AFTER-1) and not L.should_restart(None, 10**9))
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))

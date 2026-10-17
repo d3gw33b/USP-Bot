@@ -328,6 +328,11 @@ def reload_if_updated(live, lock, since):
                 since[k] = fingerprint(k)
             return
     print("New bot code found; reloading.")
+    restart_self(live, lock)
+
+
+def restart_self(live, lock):
+    """Starts a fresh copy of this bot and ends this one. The copy takes over the lock once this one lets go."""
     live.settings["live"] = False
     if live.synced:
         live.settings["cursor"] = max(live.settings["cursor"], B.now_ms() - 2000)
@@ -343,6 +348,27 @@ def reload_if_updated(live, lock, since):
                          creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
         os._exit(0)
     os.execv(sys.executable, args)
+
+
+WATCHDOG_AFTER = 180  # restart the bot if it has been disconnected from Discord this long
+
+
+def should_restart(offline_since, now):
+    """True once the bot has been offline longer than WATCHDOG_AFTER seconds."""
+    return offline_since is not None and now - offline_since > WATCHDOG_AFTER
+
+
+def start_live(cfg, stop, pause=5):
+    """Builds the bot's state, retrying with a growing pause while Discord can't be reached. None if stopped first."""
+    wait = pause
+    while not stop.is_set():
+        try:
+            return Live(cfg)
+        except Exception as e:  # a network error here used to end the whole process
+            print(f"Can't reach Discord yet ({type(e).__name__}); trying again in {wait}s.")
+            stop.wait(wait)
+            wait = min(wait * 2, 60)
+    return None
 
 
 def main():
@@ -371,15 +397,30 @@ def main():
     since = {n: fingerprint(n) for n in WATCHED}
     print("Watching " + ", ".join(WATCHED) + " for new code.")
     B.LIVE = True
-    live = Live(cfg)
+    live = start_live(cfg, stop)
+    if live is None:
+        print("Bot stopped.")
+        return
     events = queue.Queue()
     threading.Thread(target=live.work, args=(events,), daemon=True).start()
     threading.Thread(target=connect_loop, args=(live, events, stop), daemon=True).start()
+    offline_since = None
     try:
         while not stop.wait(1):
             reload_if_updated(live, lock, since)
+            if live.online.is_set():
+                offline_since = None
+            elif offline_since is None:
+                offline_since = time.time()
+            if should_restart(offline_since, time.time()):
+                print(f"Offline for over {WATCHDOG_AFTER}s; restarting the bot.")
+                restart_self(live, lock)
     except KeyboardInterrupt:
         pass
+    except Exception as e:  # never leave the bot down after a crash: start again after a short pause
+        print(f"Crashed ({type(e).__name__}); restarting in 10s.")
+        time.sleep(10)
+        restart_self(live, lock)
     live.settings["live"] = False  # hand back to the GitHub check straight away
     if live.synced:
         live.settings["cursor"] = max(live.settings["cursor"], B.now_ms() - 2000)
