@@ -80,9 +80,11 @@ SUMDIR=os.path.join(tempfile.mkdtemp(), "usp-summary")
 os.environ["USP_SUMMARY_DIR"]=SUMDIR
 os.environ["GITHUB_TOKEN"]="t"
 PATCHES=[]
+MERGES=[]
 real_http=B.http
 def fake_http(method, url, body=None, headers=None, raw=False, tries=5):
     if method=="PATCH" and "/pulls/" in url: PATCHES.append((url, body)); return {}
+    if method=="PUT" and url.endswith("/merge"): MERGES.append(url); return {}
     if "api.github.com" in url and method=="POST" and "/statuses/" in url: return {}
     return real_http(method, url, body, headers, raw, tries)
 B.http=fake_http
@@ -157,5 +159,7 @@ say("!usp voters", ch="11")
 check("27 mod chat is exempt from auto-delete", lambda: REMOVALS==[] and not D.ch["11"][-1]["content"].startswith("<"))
 card_ids={m["id"] for m,_ in cards()}
 check("28 vote cards are never scheduled for deletion", lambda: not any(i in card_ids for _,ids,_ in REMOVALS for i in ids))
+check("29 approve merges the pull request", lambda: any("pulls/93/merge" in x for x in MERGES))
+check("30 a deny does not merge", lambda: not any("pulls/92/merge" in x for x in MERGES))
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))

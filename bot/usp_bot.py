@@ -804,6 +804,18 @@ def close_rejected(st):
         print(f"could not close the pull request: {type(e).__name__}")
 
 
+def merge_approved(st):
+    """Merges the pull request when its vote ends APPROVED. Needs GITHUB_TOKEN with pull request write access."""
+    if not os.environ.get("GITHUB_TOKEN"):
+        return
+    try:
+        http("PUT", f"https://api.github.com/repos/{st['repo']}/pulls/{st['pr']}/merge", {"merge_method": "merge"},
+             {"Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json",
+              "User-Agent": "usp-bot"})
+    except Exception as e:
+        print(f"could not merge the pull request: {type(e).__name__}")
+
+
 def post_vote_status(st, state):
     """Puts the vote's result on the pull request's head commit. Needs GITHUB_TOKEN with commit status write access."""
     gate = GATE.get(state)
@@ -1201,6 +1213,8 @@ def handle_command(cfg, settings, cards, msg, now):
         team_result(cfg, m, st, state, {}, by=(w[0], uid))
         if state == "rejected":
             close_rejected(st)
+        elif state == "approved":
+            merge_approved(st)
         return f"Done: {short(st['repo'], st['pr'])} {state}."
     return "I didn't understand that. Try `!usp help`."
 
@@ -1328,6 +1342,8 @@ def check_card(cfg, settings, m, st, now):
         team_result(cfg, m, st, state, counted)
         if state == "rejected":
             close_rejected(st)
+        elif state == "approved":
+            merge_approved(st)
         return True
     return False
 
