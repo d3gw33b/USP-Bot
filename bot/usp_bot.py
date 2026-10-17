@@ -1076,7 +1076,7 @@ def check_card(cfg, settings, m, st, now):
     state, reason = decide(cfg, settings, st, reactions(cfg, cfg["ch"]["voting"], m["id"]), now)
     if state == "escalate":
         st["mode"] = "owner1"
-        st["deadline"] = now + round(float(settings["tiers"]["large"]["hours"]) * 60) * 60
+        st["deadline"] = now + round(float(settings["tiers"][st["tier"]]["hours"]) * 60) * 60  # the vote's own length, not a day
         edit_card(cfg, m, st, f"➜ {reason}. Now: **{MODE_TEXT['owner1']}**, ends {ts(st['deadline'])}.")
         ping_owners(cfg, f"Nobody voted on **{short(st['repo'], st['pr'])}**; it needs an owner now.", m["id"])
     elif state:
