@@ -1,6 +1,6 @@
 # Offline checks of the bot's behaviour, with a fake Discord and a fake GitHub.
 # Run from the repo: python3 bot/test_behaviors.py
-import sys, json, os, re, time
+import sys, json, os, re, time, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import usp_bot as B
 CLOCK=[1_790_000_000_000]
 B.now_ms=lambda: CLOCK[0]
@@ -50,7 +50,8 @@ os.environ.update(DISCORD_BOT_TOKEN="t", DISCORD_OWNER_IDS=f"{OW1},{OW2}", DISCO
 def make_pr(num, files, msg="x\n\nAgreed-to: CONTRIBUTING.md#contributor-agreement", who="bob"):
     ev={"pull_request":{"number":num,"title":f"PR {num} @everyone","body":"b","html_url":f"https://github.com/d3gw33b/USP/pull/{num}",
         "user":{"login":who,"avatar_url":"a","html_url":"u"}}}
-    json.dump(ev,open("ev.json","w")); os.environ["GITHUB_EVENT_PATH"]="ev.json"
+    path=os.path.join(tempfile.gettempdir(), "usp_test_event.json")
+    json.dump(ev,open(path,"w")); os.environ["GITHUB_EVENT_PATH"]=path
     def gh(path, raw=False, accept=None):
         if raw: return b"diff"
         if "/files" in path: return files if "page=1" in path else []
