@@ -178,5 +178,16 @@ make_pr(99,[{"filename":"a","additions":5000,"deletions":0,"status":"modified","
 c99,_=cards()[-1]
 check("35 one owner's veto on a huge vote is a stalemate, not a rejection", lambda: (D.react(c99["id"], OW1, "❌"), B.check_cards(cfg, B.load_settings(cfg)[0], B.find_cards(cfg, D.me)), cards()[-1][1]["state"]=="open")[2])
 check("36 both owners' vetoes reject a huge vote", lambda: (D.react(c99["id"], OW2, "❌"), B.check_cards(cfg, B.load_settings(cfg)[0], B.find_cards(cfg, D.me)), cards()[-1][1]["state"]=="rejected")[2])
+def env_restart_check():
+    d=tempfile.mkdtemp(); path=os.path.join(d, L.ENV_FILE); open(path,"w").write("a")
+    old=L.HERE; L.HERE=d
+    try:
+        since={L.ENV_FILE: L.fingerprint(L.ENV_FILE)}
+        unchanged=L.env_changed(since)
+        open(path,"w").write("b")
+        return unchanged is False and L.env_changed(since) is True
+    finally:
+        L.HERE=old
+check("37 a change to bot.env restarts the bot", env_restart_check)
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
