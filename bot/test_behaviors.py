@@ -95,7 +95,7 @@ def say(text, who=OW1, ch="33"):
     m=D.user_msg(ch,who,text); live.on_message(m); return D.ch[ch][-1]["content"]
 
 gh_files=[{"filename":".github/workflows/x.yml","additions":3,"deletions":2,"status":"modified","patch":"x"}]
-check("1 .github change floor is large, not very large", lambda: B.analyse(gh_files,[])[3]=="large")
+check("1 .github change is sized by its lines, not forced to large", lambda: B.analyse(gh_files,[])[3]=="tiny")
 check("2 override owners vote sets overrides on", lambda: say("!usp override owners vote") and saved()["override_on"] is True)
 check("3 override off turns them off", lambda: (say("!usp override off"), saved()["override_on"])[1] is False)
 check("4 timer defaults: command 5s, summary off, help off", lambda: B.DEFAULT_SETTINGS["timers"]=={"command":5,"summary":0,"help":0})
