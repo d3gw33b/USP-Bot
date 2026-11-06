@@ -20,6 +20,12 @@ This file runs in a public repo. Never print pull request content, summaries or 
 import json, os, re, sys, time, random, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, glob
 from datetime import datetime, timezone
 
+try:  # check web certificates the way the computer itself does (Windows' own store, fetching any
+    import truststore  # missing middle certificates), not by Python's own list, which on some PCs
+    truststore.inject_into_ssl()  # refuses GitHub or Discord with "unable to get issuer certificate"
+except Exception:
+    pass
+
 DISCORD = "https://discord.com/api/v10"
 UA = "DiscordBot (https://github.com/d3gw33b/USP-Bot, 1)"
 SETTINGS_MARK = "USP-BOT-SETTINGS"  # the older plain-text settings message; converted on first sight
@@ -1637,5 +1643,6 @@ if __name__ == "__main__":
     try:
         {"card": cmd_card, "tick": cmd_tick, "resolve-model": cmd_resolve_model, "selftest": cmd_selftest}[sys.argv[1]]()
     except Exception as e:  # keep public logs free of ids and content
-        print(f"failed: {type(e).__name__}: {e if isinstance(e, RuntimeError) else ''}")
+        why = e if isinstance(e, RuntimeError) else getattr(e, "reason", "") if isinstance(e, urllib.error.URLError) else ""
+        print(f"failed: {type(e).__name__}: {why}")
         sys.exit(1)
