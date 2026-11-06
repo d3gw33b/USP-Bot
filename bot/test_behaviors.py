@@ -350,5 +350,11 @@ def clear_takes_commands():
     say("!usp clear 2", who=OW1, ch="11")
     return any(cmd_id in ids for _,ids,_ in REMOVALS)
 check("60 clear also removes people's !usp commands in its range", clear_takes_commands)
+def comments_hidden():
+    body='<!-- claude-projects-attribution: {"github_login":"d3gw33b"} -->\n_Requested by **user**_\n\nFixes the map.<!-- unclosed'
+    p=B.build_prompt("T", body, [], [], "")
+    return ("<!--" not in p and "attribution" not in p and "Fixes the map." in p and "_Requested by **user**_" in p
+            and B.strip_html_comments("a <!-- x\ny --> b") == "a  b" and B.strip_html_comments(None) == "")
+check("61 hidden <!-- --> notes in a pull request's text never reach Discord", comments_hidden)
 for n,r in RESULTS: print(("PASS " if r is True else "FAIL ")+n+("" if r is True else f" -> {r}"))
 print("passed", sum(1 for _,r in RESULTS if r is True), "of", len(RESULTS))
