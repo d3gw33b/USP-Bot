@@ -20,11 +20,33 @@ This file runs in a public repo. Never print pull request content, summaries or 
 import json, os, re, sys, time, random, threading, urllib.request, urllib.error, urllib.parse, zipfile, subprocess, glob
 from datetime import datetime, timezone
 
-try:  # check web certificates the way the computer itself does (Windows' own store, fetching any
-    import truststore  # missing middle certificates), not by Python's own list, which on some PCs
-    truststore.inject_into_ssl()  # refuses GitHub or Discord with "unable to get issuer certificate"
-except Exception:
-    pass
+def _use_system_certificates():
+    """Checks web certificates the way the computer itself does (Windows' own store, fetching any
+    missing middle certificate), not by Python's own list, which on some PCs refuses GitHub or
+    Discord with "unable to get issuer certificate". On Windows, installs truststore once if needed."""
+    try:
+        import truststore
+    except ImportError:
+        if os.name != "nt":
+            return
+        try:  # pip checks certificates the computer's way already, so it can fetch it
+            subprocess.run([sys.executable, "-m", "pip", "install", "--user", "--quiet",
+                            "--disable-pip-version-check", "truststore"], timeout=120, check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            import site, importlib
+            importlib.invalidate_caches()
+            if site.getusersitepackages() not in sys.path:
+                sys.path.append(site.getusersitepackages())
+            import truststore
+        except Exception:
+            return
+    try:
+        truststore.inject_into_ssl()
+    except Exception:
+        pass
+
+
+_use_system_certificates()
 
 DISCORD = "https://discord.com/api/v10"
 UA = "DiscordBot (https://github.com/d3gw33b/USP-Bot, 1)"
