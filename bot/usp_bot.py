@@ -114,6 +114,12 @@ def http(method, url, body=None, headers=None, raw=False, tries=5):
                 time.sleep(2 ** attempt)
                 continue
             raise RuntimeError(f"{method} -> HTTP {e.code}") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            # the connection itself dropped or never opened (a blip on the runner's network): try again
+            if attempt < tries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise
     raise RuntimeError(f"{method} -> rate limited")
 
 
