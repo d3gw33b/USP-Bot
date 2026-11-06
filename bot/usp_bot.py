@@ -544,6 +544,14 @@ def size_tier(settings, lines):
     return "very_large"
 
 
+HTML_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.S)
+
+
+def strip_html_comments(text):
+    """Drops hidden <!-- ... --> notes (like the attribution line in Claude's pull requests) so they never show on Discord."""
+    return HTML_COMMENT.sub("", text or "").strip()
+
+
 def build_prompt(title, body, files, flags, diff):
     lst = "\n".join(f"- {f['filename']} (+{f['additions']} -{f['deletions']}, {f['status']})" for f in files[:60])
     return f"""You review code changes for a small volunteer team. Most readers are NOT programmers.
@@ -566,7 +574,7 @@ Automatic checks already found:
 {chr(10).join(flags) or "nothing unusual"}
 
 Title: {title[:200]}
-Description: {(body or '')[:1500]}
+Description: {strip_html_comments(body)[:1500]}
 Files:
 {lst}
 
@@ -653,7 +661,7 @@ def cmd_card():
             diff = gh(f"/repos/{repo}/pulls/{num}", raw=True, accept="application/vnd.github.v3.diff").decode("utf-8", "replace")
             prompt = build_prompt(pr["title"], pr.get("body"), files, flags, diff)
             summary = run_gemini(model, prompt) if model["kind"] == "gemini" else run_local(model, prompt)
-            summary = summary.strip()[:2600]
+            summary = strip_html_comments(summary)[:2600]
             model_note = f"Summary by {model['id']}"
         except Exception as e:
             print(f"AI summary skipped: {type(e).__name__}")
@@ -1092,7 +1100,7 @@ def check_summary_requests(cfg):
         reply = os.path.join(rep_dir, name[:-5] + ".txt")
         if os.path.exists(reply):
             with open(reply, encoding="utf-8") as f:
-                text = f.read().strip()[:1500]
+                text = strip_html_comments(f.read())[:1500]
             body = f"**Plain version of {short(doc['repo'], doc['pr'])}**\n{text}\n\n{DISCLAIMER}" if text else None
         elif now_ms() // 1000 - doc["requested_at"] > REQUEST_WAIT:
             body = None
@@ -1117,7 +1125,7 @@ def make_summary(settings, st):
     _, _, flags, _ = analyse(files, [])
     prompt = build_prompt(pr["title"], pr.get("body"), files, flags, diff)
     out = run_gemini(model, prompt) if model["kind"] == "gemini" else run_local(model, prompt)
-    return out.strip()[:2600]
+    return strip_html_comments(out)[:2600]
 
 
 class Ask(str):
