@@ -640,7 +640,10 @@ def cmd_card():
     if not cfg:
         print("Bot secrets are not set; skipping.")
         return
-    ev = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+    # (as UTF-8: on a Windows runner Python reads files as cp1252 by default, which fails on some
+    # characters in a pull request's text, such as the pause sign U+23F8)
+    with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as f:
+        ev = json.load(f)
     pr = ev["pull_request"]
     repo = os.environ["GITHUB_REPOSITORY"]
     num = pr["number"]
